@@ -11,7 +11,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 
 # Hide deprecation warnings for plt
-st.set_option('deprecation.showPyplotGlobalUse', False)
 
 def main():
     # --- Title & Description ---
