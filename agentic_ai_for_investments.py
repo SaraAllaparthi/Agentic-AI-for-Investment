@@ -9,8 +9,6 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import MinMaxScaler
 
-st.set_option('deprecation.showPyplotGlobalUse', False)
-
 def main():
     st.title("3-Month Ahead Stock Price - Ensemble Prediction")
 
