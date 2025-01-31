@@ -5,104 +5,151 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import date, timedelta
 
-# Sklearn for the "black box" model
+from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
+from xgboost import XGBRegressor
 
 def main():
-    # --- Title & Description ---
-    st.title("AI-Driven Stock Price Prediction (MVP)")
+    st.title("Enhanced Stock Price Prediction (MVP)")
 
     st.markdown("""
-    **Disclaimer**: This application is for **informational purposes only** and does **not** constitute financial advice. 
-    Always do your own research or consult a professional before making investment decisions.
-
     **Key Features**:
-    - Fetches *3 years* of historical data from Yahoo Finance (for training).
-    - Displays the last 6 months of *actual/real* prices in a chart **by default**.
-    - Predicts *4 horizons*: Next Day, 1 Week, 1 Month, 6 Months (using a single Random Forest model).
-    - Minimal chart with real vs. predicted prices.
-    """)
+    - Trains & tests on *3 years* of historical data (from Yahoo Finance).
+    - Uses **4 separate horizons**: Next Day (1 trading day), Next Week (5), Next Month (~21), Next 6 Months (~126).
+    - For each horizon, we build an **ensemble** of 3 models (Linear, Random Forest, XGBoost) and **average** predictions.
+    - We **plot** Actual vs. Predicted on the **test set** for each horizon to show backtest performance.
+    - We also provide a **future** (post-last-date) prediction for each horizon as a numeric value.
     
-    # --- Conversational Prompt: Ask Ticker ---
-    st.write("Hi! Which stock would you like to check today?")
-    ticker = st.text_input("Enter a valid stock ticker (e.g., AAPL, TSLA, AMZN):", value="AAPL")
+    **Disclaimer**: This application is for **informational purposes only** and does **not** constitute financial advice. 
+    Predictions can be inaccurate; always do your own research or consult a professional before making investment decisions.
+    """)
 
-    # --- Button to Trigger ---
+    ticker = st.text_input("Enter a valid stock ticker (e.g. AAPL, TSLA, AMZN):", value="AAPL")
+
     if st.button("Predict Prices"):
         if not ticker:
             st.error("Please enter a ticker symbol.")
             return
         
-        st.write(f"Fetching the last 3 years of data for: **{ticker}**")
+        st.write(f"Fetching data for {ticker}...")
 
-        # --- Fetch Data (3 years) ---
+        # 3 years of data
         end_date = date.today()
-        start_date = end_date - timedelta(days=3*365)  # 3 years ago
+        start_date = end_date - timedelta(days=3*365)
         df = yf.download(ticker, start=start_date, end=end_date)
         
         if df.empty:
             st.error("No data returned. Check the ticker symbol or try again later.")
             return
-        
-        # --- Basic Feature Engineering ---
-        df_features = feature_engineering(df)
-        
-        # Define multi-step horizons
+
+        # Feature Engineering
+        df_feat = feature_engineering(df)
+
+        # We define 4 horizons with shift in trading days
         horizon_map = {
             'Next_Day': 1,
             'Next_Week': 5,
             'Next_Month': 21,
             'Next_6Months': 126
         }
-        
-        # Create columns for each horizon
-        for col_name, shift_val in horizon_map.items():
-            df_features[col_name] = df_features['Close'].shift(-shift_val)
 
-        # Drop rows that became NaN
-        df_features.dropna(inplace=True)
-        
-        if len(df_features) < 50:
-            st.warning("Not enough data left after shifting for predictions. Try a different ticker or date range.")
+        # Create new columns for each horizon
+        for horizon_name, shift_val in horizon_map.items():
+            df_feat[horizon_name] = df_feat['Close'].shift(-shift_val)
+
+        # Drop rows that became NaN due to shifting
+        df_feat.dropna(inplace=True)
+
+        if len(df_feat) < 50:
+            st.warning("Not enough data left after shifting. Try a different ticker or date range.")
             return
 
-        # Features & Targets
+        # We will use these columns as features
         X_cols = ['Close', 'MA10', 'MA50', 'RSI', 'MACD']
-        y_cols = list(horizon_map.keys())  # Next_Day, Next_Week, etc.
-
-        X = df_features[X_cols]
-        y = df_features[y_cols]
-
-        # Train/Test Split (simple, no shuffle)
-        X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=0.2)
-
-        # Scale Features
-        scaler_X = MinMaxScaler()
-        X_train_scaled = scaler_X.fit_transform(X_train)
-        X_test_scaled  = scaler_X.transform(X_test)
-
-        # Build RandomForest Model (multi-output)
-        rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
-        rf_model.fit(X_train_scaled, y_train)
-
-        # Forward Prediction using the last row of df_features
-        last_row_features = df_features.iloc[[-1]][X_cols]
-        last_row_scaled   = scaler_X.transform(last_row_features)
-        forward_prediction = rf_model.predict(last_row_scaled)[0]  
-        # forward_prediction = [pred_NextDay, pred_NextWeek, pred_NextMonth, pred_6Months]
         
-        # --- Display Chart (Last 6 Months) ---
-        st.write("## Recent 6-Month Chart with Predicted Future Points")
-        plot_last_6_months(df_features, forward_prediction, horizon_map)
+        results_df = df_feat.copy()  # We'll store predictions for each horizon in this
+
+        # Time-based train/test split (e.g., first 80% train, last 20% test)
+        train_size = int(len(df_feat)*0.8)
+        train_data = df_feat.iloc[:train_size]
+        test_data  = df_feat.iloc[train_size:]
+
+        # For plotting
+        test_index = test_data.index
+
+        # We'll store predictions in these columns for plotting
+        for horizon_name in horizon_map.keys():
+            results_df[f"Pred_{horizon_name}"] = np.nan
+
+        # For each horizon, build an ensemble model, predict on test set, store predictions
+        st.write("## Training & Predicting on Each Horizon...")
         
-        # --- Display Numeric Predictions ---
-        st.write("### Predicted Prices:")
-        st.write(f"- **Next Day**: {forward_prediction[0]:.2f} USD")
-        st.write(f"- **Next Week**: {forward_prediction[1]:.2f} USD")
-        st.write(f"- **Next Month**: {forward_prediction[2]:.2f} USD")
-        st.write(f"- **Next 6 Months**: {forward_prediction[3]:.2f} USD")
+        # We'll do a final forward prediction from the last row in df_feat
+        last_row_features = df_feat.iloc[[-1]][X_cols]
+        
+        # Scale features (recommended). We'll do a minimal approach: same scaler across train/test
+        # If you want separate scalers per horizon, you can, but it's usually the same
+        scaler = MinMaxScaler()
+
+        # Fit on entire dataset's feature range (some might prefer fit only on train)
+        # For a more realistic scenario, fit only on train_data, then transform test_data, etc.
+        scaler.fit(df_feat[X_cols])
+        X_train_scaled = scaler.transform(train_data[X_cols])
+        X_test_scaled  = scaler.transform(test_data[X_cols])
+        X_last_scaled  = scaler.transform(last_row_features[X_cols])
+
+        future_predictions = {}  # to store numeric future preds
+
+        for horizon_name, shift_val in horizon_map.items():
+            st.write(f"### Horizon: {horizon_name}")
+            
+            # y is the shifted close
+            y_train = train_data[horizon_name]
+            y_test  = test_data[horizon_name]
+            
+            # Subset
+            # For a robust approach, do: X_train = scaler.transform(train_data[X_cols]) etc.
+            X_train = X_train_scaled[:len(y_train)]  # same number of rows as train_data
+            X_test  = X_test_scaled[len(y_train):]   # correspond to test_data rows
+
+            # Build an ensemble of 3 regressors
+            lr_model  = LinearRegression()
+            rf_model  = RandomForestRegressor(n_estimators=100, random_state=42)
+            xgb_model = XGBRegressor(n_estimators=100, random_state=42, verbosity=0)
+            
+            # Fit each on training data
+            lr_model.fit(X_train, y_train)
+            rf_model.fit(X_train, y_train)
+            xgb_model.fit(X_train, y_train)
+            
+            # Predict on test data
+            lr_pred  = lr_model.predict(X_test)
+            rf_pred  = rf_model.predict(X_test)
+            xgb_pred = xgb_model.predict(X_test)
+            
+            # Average ensemble
+            ensemble_pred = (lr_pred + rf_pred + xgb_pred) / 3.0
+            
+            # Store these predictions in results_df
+            results_df.loc[test_index, f"Pred_{horizon_name}"] = ensemble_pred
+
+            # Plot Actual vs. Predicted for this horizon (test set only)
+            plot_test_predictions(horizon_name, test_data[horizon_name], ensemble_pred, test_index)
+            
+            # Future (post-last-date) prediction using the final row's features
+            # We'll do the same ensemble approach
+            lr_future  = lr_model.predict(X_last_scaled)
+            rf_future  = rf_model.predict(X_last_scaled)
+            xgb_future = xgb_model.predict(X_last_scaled)
+            final_ensemble_future = (lr_future + rf_future + xgb_future) / 3.0
+            
+            future_predictions[horizon_name] = final_ensemble_future[0]
+
+        # --- Show final numeric predictions for the future ---
+        st.write("## Future Predictions (After Last Known Date)")
+        for horizon_name in horizon_map.keys():
+            st.write(f"- **{horizon_name}**: {future_predictions[horizon_name]:.2f} USD")
 
     else:
         st.info("Enter a ticker and click 'Predict Prices' to proceed.")
@@ -136,46 +183,30 @@ def feature_engineering(df):
     df.dropna(inplace=True)
     return df
 
-def plot_last_6_months(df_features, forward_prediction, horizon_map):
+def plot_test_predictions(horizon_name, actual_series, predicted_array, test_index):
     """
-    Plots the last 6 months of actual closing prices 
-    plus the 4 predicted points (Next Day, Next Week, Next Month, 6 Months).
+    Plots a line chart of Actual vs. Predicted for the test set
+    for the given horizon.
+    actual_series is from test_data[horizon_name].
+    predicted_array is ensemble predictions (same length).
+    test_index is the index corresponding to test_data rows.
     """
-    # Filter data for the last 6 months
-    if len(df_features) == 0:
-        return  # Safety check
-
-    last_date_in_data = df_features.index[-1]
-    six_months_ago = last_date_in_data - pd.DateOffset(months=6)
-    df_6mo = df_features[df_features.index >= six_months_ago].copy()
+    st.write(f"**Test Set: Actual vs. Predicted for {horizon_name}**")
+    fig, ax = plt.subplots(figsize=(10,4))
     
-    # We'll plot the actual close for these last 6 months
-    plt.figure(figsize=(10,5))
-    plt.plot(df_6mo.index, df_6mo['Close'], label="Actual Close (Last 6 Mo.)", color='blue')
-
-    # Mark the final known date
-    last_close_value = df_6mo['Close'].iloc[-1]
-    plt.plot(last_date_in_data, last_close_value, 'ro', label="Latest Known Close")
-
-    # We have predictions for next day, next week, next month, next 6 months
-    # We'll place each predicted value on approximate future dates
-    horizon_names = list(horizon_map.keys())  # e.g. [Next_Day, Next_Week, Next_Month, Next_6Months]
-    for i, horizon in enumerate(horizon_names):
-        pred_val = forward_prediction[i]
-
-        # Approx: place each future point some days offset from last_date_in_data
-        shift_val = horizon_map[horizon]  # e.g. 1, 5, 21, 126
-        future_date = last_date_in_data + pd.Timedelta(days=shift_val)
-
-        plt.plot(future_date, pred_val, 'gx', markersize=10, 
-                 label=f"Pred {horizon}")
-
-    plt.title("Last 6 Months Actual Prices + Predicted Future Points")
-    plt.xlabel("Date")
-    plt.ylabel("Price (USD)")
-    plt.legend()
+    # Convert to numeric for plotting
+    actual_values = actual_series.values
+    ax.plot(test_index, actual_values, label="Actual", color='blue')
+    
+    ax.plot(test_index, predicted_array, label="Predicted (Ensemble)", color='red')
+    
+    ax.set_title(f"{horizon_name} - Actual vs. Ensemble Predicted (Test Set)")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Price (USD)")
+    ax.legend()
+    plt.xticks(rotation=45)
     plt.tight_layout()
-    st.pyplot()
+    st.pyplot(fig)
 
 if __name__ == "__main__":
     main()
