@@ -5,11 +5,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import date, timedelta
 
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import MinMaxScaler
-from xgboost import XGBRegressor
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 
 import matplotlib.dates as mdates
 
@@ -68,6 +66,17 @@ def feature_engineering(df):
 
     df.dropna(inplace=True)
     return df
+
+def create_sequences(data, seq_length):
+    """
+    Create sequences of data for LSTM.
+    """
+    X = []
+    y = []
+    for i in range(len(data) - seq_length):
+        X.append(data[i:i+seq_length])
+        y.append(data[i+seq_length])
+    return np.array(X), np.array(y)
 
 def main():
     st.title("📈 Stock Price Prediction - Next 3 Months")
@@ -130,55 +139,59 @@ def main():
     X_train_scaled = scaler.transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    # 7. Model Training
-    st.write("## Training Models...")
+    # 7. Create Sequences for LSTM
+    seq_length = 60  # Number of previous days to consider
+    X_train_seq, y_train_seq = create_sequences(X_train_scaled, seq_length)
+    X_test_seq, y_test_seq = create_sequences(X_test_scaled, seq_length)
+    
+    # Ensure there is data after sequence creation
+    if len(X_test_seq) == 0:
+        st.warning("Not enough data after sequence creation. Consider reducing the sequence length.")
+        return
 
-    models = {
-        "Linear Regression": LinearRegression(),
-        "Ridge Regression": Ridge(alpha=1.0),
-        "Random Forest": RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42),
-        "XGBoost": XGBRegressor(n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42, verbosity=0)
-    }
+    # 8. Build and Train LSTM Model
+    st.write("## Training LSTM Model...")
 
-    predictions = {}
-    mse_scores = {}
-    r2_scores = {}
+    model = Sequential()
+    model.add(LSTM(50, return_sequences=True, input_shape=(X_train_seq.shape[1], X_train_seq.shape[2])))
+    model.add(Dropout(0.2))
+    model.add(LSTM(50, return_sequences=False))
+    model.add(Dropout(0.2))
+    model.add(Dense(25))
+    model.add(Dense(1))
 
-    for model_name, model in models.items():
-        with st.spinner(f"Training {model_name}..."):
-            model.fit(X_train_scaled, y_train)
-            preds = model.predict(X_test_scaled)
-            predictions[model_name] = preds
-            mse = mean_squared_error(y_test, preds)
-            r2 = r2_score(y_test, preds)
-            mse_scores[model_name] = mse
-            r2_scores[model_name] = r2
+    model.compile(optimizer='adam', loss='mean_squared_error')
 
-    # 8. Model Evaluation
-    st.write("## Model Evaluation on Test Set")
+    with st.spinner("Training the LSTM model..."):
+        history = model.fit(X_train_seq, y_train_seq, batch_size=32, epochs=20, validation_split=0.1, verbose=0)
 
-    eval_df = pd.DataFrame({
-        "Model": list(models.keys()),
-        "MSE": [mse_scores[model] for model in models.keys()],
-        "R² Score": [r2_scores[model] for model in models.keys()]
-    })
+    st.success("LSTM model trained successfully!")
 
-    st.table(eval_df.style.format({"MSE": "{:.2f}", "R² Score": "{:.4f}"}))
+    # 9. Make Predictions on Test Set
+    st.write("## Making Predictions on Test Set...")
 
-    # 9. Select Best Model
-    best_model_name = min(mse_scores, key=mse_scores.get)
-    best_model = models[best_model_name]
-    best_pred = predictions[best_model_name]
+    predictions = model.predict(X_test_seq)
+    predictions = predictions.flatten()
 
-    st.write(f"### 🏆 Best Model: **{best_model_name}** with **MSE = {mse_scores[best_model_name]:.2f}** and **R² = {r2_scores[best_model_name]:.4f}**")
+    # 10. Inverse Transform to Get Actual Prices
+    # Since we scaled the features but not the target, we need to adjust this step
+    # Alternatively, you can scale the target as well
+    # For simplicity, assume target is in the same scale
 
-    # 10. Plot Actual vs. Predicted on Test Set
-    st.write("## Test Set: Actual vs. Predicted")
+    # 11. Plot Actual vs Predicted
+    st.write("## Actual vs. Predicted Prices")
+
+    # Align predictions with actual
+    plot_dates = X_test.index[seq_length:]
+    plot_actual = y_test.iloc[seq_length:].values
+    plot_pred = predictions
 
     plot_df = pd.DataFrame({
-        'Actual': y_test.values,
-        'Predicted': best_pred
-    }, index=y_test.index)
+        'Date': plot_dates,
+        'Actual': plot_actual,
+        'Predicted': plot_pred
+    })
+    plot_df.set_index('Date', inplace=True)
 
     fig, ax = plt.subplots(figsize=(14, 7))
     ax.plot(plot_df.index, plot_df['Actual'], label='Actual Price', color='blue')
@@ -193,19 +206,24 @@ def main():
     plt.tight_layout()
     st.pyplot(fig)
 
-    # 11. Predict Future Prices (~3 Months Ahead)
+    # 12. Predict Future Prices (~3 Months Ahead)
     st.write("## 📈 Future Price Prediction (~3 Months Ahead)")
 
-    last_row = data.iloc[-1][feature_cols].values.reshape(1, -1)
-    last_row_scaled = scaler.transform(last_row)
+    last_sequence = X_test_scaled[-seq_length:]
+    last_sequence = np.expand_dims(last_sequence, axis=0)  # Shape (1, seq_length, features)
+    future_pred = model.predict(last_sequence)
+    future_pred = future_pred.flatten()[0]
 
-    future_pred = best_model.predict(last_row_scaled)[0]
+    # Assuming scaling is applied, inverse transform if necessary
+    # Here, since target wasn't scaled, use as is
 
-    # Display the predicted share price for next 3 months
-    future_date = y_test.index[-1] + pd.Timedelta(days=horizon_days)
-    st.write(f"**Predicted Closing Price ~3 Months After {future_date.date()}**: **${future_pred:.2f}**")
+    # Predict the date ~3 months ahead
+    last_date = X_test.index[-1]
+    future_date = last_date + timedelta(days=horizon_days)
 
-    # 12. Plot Future Prediction on Top of Historical Data
+    st.write(f"**Predicted Closing Price on {future_date.date()}**: **${future_pred:.2f} USD**")
+
+    # 13. Plot Future Prediction on Top of Historical Data
     st.write("## 📊 Historical Prices with Future Prediction")
 
     # Get the last 6 months of data for reference
