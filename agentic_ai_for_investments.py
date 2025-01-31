@@ -9,11 +9,13 @@ from prophet import Prophet
 
 import matplotlib.dates as mdates
 
+# Remove or comment out the problematic line
+# st.set_option('deprecation.showPyplotGlobalUse', False)
+
 # Caching the ticker list to speed up the app
 @st.cache_data
 def load_ticker_list():
-    # For demonstration, we use a small curated list.
-    # For a comprehensive list, consider loading from a CSV or external source.
+    # Curated list of tickers
     ticker_dict = {
         "AAPL": "Apple Inc.",
         "GOOGL": "Alphabet Inc. (Google)",
@@ -65,23 +67,26 @@ def main():
     st.success("Data fetched successfully!")
 
     # 3. Prepare Data for Prophet
-    df_prophet = data.reset_index()[['Date', 'Close']]
-    df_prophet.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
+    df_prophet = data.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
 
-    # 4. Initialize and Fit Prophet Model
+    # 4. Ensure 'y' is numeric
+    df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
+    df_prophet.dropna(inplace=True)  # Drop rows with non-numeric 'y'
+
+    # 5. Initialize and Fit Prophet Model
     model = Prophet(daily_seasonality=False, yearly_seasonality=True, weekly_seasonality=True)
     model.fit(df_prophet)
 
-    # 5. Create Future DataFrame for 3 Months (approx. 90 days)
+    # 6. Create Future DataFrame for 3 Months (approx. 90 days)
     future = model.make_future_dataframe(periods=90)
 
-    # 6. Make Predictions
+    # 7. Make Predictions
     forecast = model.predict(future)
 
-    # 7. Extract the Predicted Price 3 Months Ahead
+    # 8. Extract the Predicted Price 3 Months Ahead
     predicted_price = forecast.iloc[-90:]['yhat'].mean()
 
-    # 8. Plotting
+    # 9. Plotting
     st.write("## Stock Price Forecast")
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -108,17 +113,20 @@ def main():
     plt.xticks(rotation=45)
     plt.tight_layout()
 
+    # Pass the figure to st.pyplot
     st.pyplot(fig)
 
-    # 9. Display Predicted Price
+    # 10. Display Predicted Price
     st.write(f"### 📅 **Predicted Average Closing Price in 3 Months**: **${predicted_price:.2f} USD**")
 
-    # 10. Plot Last 6 Months Actual vs Forecasted
-    st.write("## Last 6 Months: Actual vs. Predicted Prices")
+    # 11. Plot Last 6 Months Actual vs Forecasted
+    st.write("## Last 6 Months: Actual vs. Forecasted Prices")
 
     # Define the period for the last 6 months
     six_months_ago = end_date - timedelta(days=6*30)  # Approx. 6 months
-    mask = (forecast['ds'] >= six_months_ago) & (forecast['ds'] <= end_date + timedelta(days=90))
+    six_months_ago_pd = pd.Timestamp(six_months_ago)
+
+    mask = (forecast['ds'] >= six_months_ago_pd) & (forecast['ds'] <= end_date + timedelta(days=90))
     plot_forecast = forecast.loc[mask]
 
     fig2, ax2 = plt.subplots(figsize=(14, 7))
@@ -135,6 +143,7 @@ def main():
     plt.xticks(rotation=45)
     plt.tight_layout()
 
+    # Pass the figure to st.pyplot
     st.pyplot(fig2)
 
 if __name__ == "__main__":
