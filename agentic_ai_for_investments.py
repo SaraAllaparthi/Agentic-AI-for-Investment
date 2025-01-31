@@ -4,9 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import date, timedelta
-
 from prophet import Prophet
-
 import matplotlib.dates as mdates
 
 # Set Streamlit page configuration
@@ -40,8 +38,12 @@ for ticker, name in AVAILABLE_TICKERS.items():
 # Function to fetch data
 @st.cache_data(show_spinner=False)
 def fetch_data(ticker, start_date, end_date):
-    df = yf.download(ticker, start=start_date, end=end_date)
-    return df
+    try:
+        df = yf.download(ticker, start=start_date, end=end_date)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching data for {ticker}: {e}")
+        return pd.DataFrame()
 
 def main():
     st.title("📈 Stock Price Forecasting - Next 3 Months")
@@ -70,15 +72,23 @@ def main():
             return
 
         # Prepare data for Prophet
-        df_prophet = data.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
+        try:
+            df_prophet = data.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
+        except KeyError:
+            st.error("The fetched data does not contain 'Date' or 'Close' columns. Please try a different ticker.")
+            return
 
         # Ensure 'y' is numeric and handle any non-numeric entries
         df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
+        initial_length = len(df_prophet)
         df_prophet.dropna(inplace=True)  # Drop rows with non-numeric 'y'
-
+        final_length = len(df_prophet)
+        
         if df_prophet.empty:
-            st.error("Insufficient data after processing. Please try a different ticker.")
+            st.error("Insufficient numeric data after processing. Please try a different ticker.")
             return
+        elif final_length < initial_length:
+            st.warning(f"Dropped {initial_length - final_length} rows due to non-numeric 'Close' values.")
 
         # Initialize and fit Prophet model
         try:
@@ -166,3 +176,80 @@ def main():
 
     if __name__ == "__main__":
         main()
+    ```
+
+#### **c. Explanation of the Corrections and Enhancements**
+
+1. **Improved Error Handling**:
+    - **Fetching Data**:
+        ```python
+        try:
+            df_prophet = data.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
+        except KeyError:
+            st.error("The fetched data does not contain 'Date' or 'Close' columns. Please try a different ticker.")
+            return
+        ```
+        Ensures that the necessary columns `'Date'` and `'Close'` exist in the fetched data.
+
+    - **Converting 'y' to Numeric**:
+        ```python
+        df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
+        df_prophet.dropna(inplace=True)  # Drop rows with non-numeric 'y'
+        
+        if df_prophet.empty:
+            st.error("Insufficient numeric data after processing. Please try a different ticker.")
+            return
+        elif final_length < initial_length:
+            st.warning(f"Dropped {initial_length - final_length} rows due to non-numeric 'Close' values.")
+        ```
+        Converts the `'y'` column to numeric and handles non-numeric entries gracefully by dropping them and notifying the user.
+
+    - **Prophet Model Fitting and Prediction**:
+        Wrapped in `try-except` blocks to catch and display any errors during model fitting and prediction.
+
+    - **Forecast Data Availability**:
+        ```python
+        if plot_forecast.empty:
+            st.warning("Not enough forecasted data to display the last 6 months comparison.")
+            return
+        ```
+        Ensures that there's enough data to plot the last 6 months comparison.
+
+2. **User Interface Enhancements**:
+    - **Page Configuration**:
+        ```python
+        st.set_page_config(
+            page_title="Stock Price Forecasting",
+            layout="wide",
+            initial_sidebar_state="expanded",
+        )
+        ```
+        Sets the page title, layout, and initial sidebar state for a better user experience.
+
+    - **Available Tickers Sidebar**:
+        Clearly lists available tickers with their corresponding company names to guide users.
+
+    - **Input Field and Button**:
+        Provides a text input for the ticker symbol and a button to initiate forecasting.
+
+3. **Ensuring 'y' is a Series**:
+    - By selecting a single column `['y']` from the DataFrame, we ensure that `df_prophet['y']` is a Pandas Series, which is compatible with `pd.to_numeric`.
+    - Additional error checks confirm that after processing, `df_prophet` is not empty.
+
+4. **Visualization Enhancements**:
+    - **Confidence Intervals**: Added shaded areas representing Prophet's confidence intervals.
+    - **Date Formatting**: Improved date labels for clarity.
+    - **Figure Passing**: Explicitly passes the `figure` object to `st.pyplot(fig)` to adhere to Streamlit's latest best practices.
+
+5. **Streamlined Flow**:
+    - The app only proceeds with forecasting when the user clicks the **"Forecast 3-Month Price"** button.
+    - Early returns prevent the app from attempting to process invalid inputs or insufficient data.
+
+### **3. Running the Corrected Streamlit App**
+
+1. **Ensure Dependencies are Installed**
+
+   Make sure all required libraries are installed. If you created the `requirements.txt`, run:
+
+   ```bash
+   pip install -r requirements.txt
