@@ -4,17 +4,16 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import date, timedelta
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-import joblib
-import os
+
+from prophet import Prophet
 
 import matplotlib.dates as mdates
 
 # Caching the ticker list to speed up the app
 @st.cache_data
 def load_ticker_list():
+    # For demonstration, we use a small curated list.
+    # For a comprehensive list, consider loading from a CSV or external source.
     ticker_dict = {
         "AAPL": "Apple Inc.",
         "GOOGL": "Alphabet Inc. (Google)",
@@ -30,21 +29,14 @@ def load_ticker_list():
     }
     return ticker_dict
 
-def feature_engineering(df):
-    # [Your feature engineering steps]
-    # ...
+# Caching the data fetching to prevent redundant downloads
+@st.cache_data
+def fetch_data(ticker, start_date, end_date):
+    df = yf.download(ticker, start=start_date, end=end_date)
     return df
 
-def create_sequences(data, seq_length):
-    X = []
-    y = []
-    for i in range(len(data) - seq_length):
-        X.append(data[i:i+seq_length])
-        y.append(data[i+seq_length])
-    return np.array(X), np.array(y)
-
 def main():
-    st.title("📈 Stock Price Prediction - Next 3 Months")
+    st.title("📈 Stock Price Forecasting - Next 3 Months")
 
     st.markdown("""
     **Disclaimer**: This application is for **informational purposes only** and does **not** constitute financial advice. 
@@ -64,7 +56,7 @@ def main():
     with st.spinner("Fetching historical data..."):
         end_date = date.today()
         start_date = end_date - timedelta(days=3*365)  # Last 3 years
-        data = yf.download(selected_ticker, start=start_date, end=end_date)
+        data = fetch_data(selected_ticker, start_date, end_date)
 
     if data.empty:
         st.error("No data found. Please select a different ticker.")
@@ -72,142 +64,77 @@ def main():
 
     st.success("Data fetched successfully!")
 
-    # 3. Feature Engineering
-    data = feature_engineering(data)
+    # 3. Prepare Data for Prophet
+    df_prophet = data.reset_index()[['Date', 'Close']]
+    df_prophet.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
 
-    # 4. Define Target Variable (~3 months ahead)
-    horizon_days = 63  # Approx. 3 months
-    data['Target'] = data['Close'].shift(-horizon_days)
-    data.dropna(inplace=True)  # Remove rows without target
+    # 4. Initialize and Fit Prophet Model
+    model = Prophet(daily_seasonality=False, yearly_seasonality=True, weekly_seasonality=True)
+    model.fit(df_prophet)
 
-    # Shift features by 1 day to prevent look-ahead bias
-    feature_cols = ['Close', 'MA10', 'MA50', 'RSI', 'MACD']
-    data[feature_cols] = data[feature_cols].shift(1)
-    data.dropna(inplace=True)
+    # 5. Create Future DataFrame for 3 Months (approx. 90 days)
+    future = model.make_future_dataframe(periods=90)
 
-    # 5. Train-Test Split (Time-based)
-    X = data[feature_cols]
-    y = data['Target']
+    # 6. Make Predictions
+    forecast = model.predict(future)
 
-    split_index = int(len(X) * 0.8)
-    X_train, X_test = X.iloc[:split_index], X.iloc[split_index:]
-    y_train, y_test = y.iloc[:split_index], y.iloc[split_index:]
+    # 7. Extract the Predicted Price 3 Months Ahead
+    predicted_price = forecast.iloc[-90:]['yhat'].mean()
 
-    if len(X_test) == 0:
-        st.warning("Not enough data for testing. Please select a different ticker or adjust the date range.")
-        return
-
-    # 6. Feature Scaling
-    scaler = MinMaxScaler()
-    scaler.fit(X_train)
-
-    X_train_scaled = scaler.transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-
-    # 7. Create Sequences for LSTM
-    seq_length = 60  # Number of previous days to consider
-    X_train_seq, y_train_seq = create_sequences(X_train_scaled, seq_length)
-    X_test_seq, y_test_seq = create_sequences(X_test_scaled, seq_length)
-    
-    # Ensure there is data after sequence creation
-    if len(X_test_seq) == 0:
-        st.warning("Not enough data after sequence creation. Consider reducing the sequence length.")
-        return
-
-    # 8. Load Pre-trained Models
-    st.write("## Loading Pre-trained Models...")
-
-    model_files = {
-        "LinearRegression": f'models/{selected_ticker}_LinearRegression.joblib',
-        "RidgeRegression": f'models/{selected_ticker}_Ridge.joblib',
-        "RandomForest": f'models/{selected_ticker}_RandomForest.joblib',
-        "XGBoost": f'models/{selected_ticker}_XGBoost.joblib'
-    }
-
-    loaded_models = {}
-    for name, path in model_files.items():
-        if os.path.exists(path):
-            loaded_models[name] = joblib.load(path)
-        else:
-            st.error(f"Model file not found: {path}. Please ensure models are trained and saved.")
-            return
-
-    st.success("Models loaded successfully!")
-
-    # 9. Make Predictions on Test Set
-    st.write("## Making Predictions on Test Set...")
-
-    predictions = {}
-    for name, model in loaded_models.items():
-        preds = model.predict(X_test_seq)
-        predictions[name] = preds
-
-    # 10. Select Best Model (Lowest MSE)
-    mse_scores = {}
-    for name, preds in predictions.items():
-        mse = mean_squared_error(y_test_seq, preds)
-        mse_scores[name] = mse
-
-    best_model_name = min(mse_scores, key=mse_scores.get)
-    best_model = loaded_models[best_model_name]
-    best_pred = predictions[best_model_name]
-
-    # 11. Plot Actual vs. Predicted on Test Set
-    st.write("## Actual vs. Predicted Prices on Test Set")
-
-    plot_dates = X_test.index[seq_length:]
-    plot_actual = y_test.iloc[seq_length:].values
-    plot_pred = best_pred
-
-    plot_df = pd.DataFrame({
-        'Actual': plot_actual,
-        'Predicted': plot_pred
-    }, index=plot_dates)
+    # 8. Plotting
+    st.write("## Stock Price Forecast")
 
     fig, ax = plt.subplots(figsize=(14, 7))
-    ax.plot(plot_df.index, plot_df['Actual'], label='Actual Price', color='blue')
-    ax.plot(plot_df.index, plot_df['Predicted'], label='Predicted Price', color='red')
-    ax.set_title(f"{selected_ticker} - Actual vs. Predicted Prices on Test Set")
+
+    # Plot historical data
+    ax.plot(df_prophet['ds'], df_prophet['y'], label='Actual Price', color='blue')
+
+    # Plot forecast
+    ax.plot(forecast['ds'], forecast['yhat'], label='Forecasted Price', color='red')
+
+    # Highlight the forecasted area
+    ax.fill_between(forecast['ds'], forecast['yhat_lower'], forecast['yhat_upper'], 
+                    color='pink', alpha=0.3, label='Confidence Interval')
+
+    # Formatting the plot
+    ax.set_title(f"{selected_ticker} - Actual vs. Forecasted Prices")
     ax.set_xlabel("Date")
     ax.set_ylabel("Price (USD)")
     ax.legend()
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+
+    # Improve date formatting on the x-axis
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
     plt.xticks(rotation=45)
     plt.tight_layout()
+
     st.pyplot(fig)
 
-    # 12. Predict Future Prices (~3 Months Ahead)
-    st.write("## 📈 Future Price Prediction (~3 Months Ahead)")
+    # 9. Display Predicted Price
+    st.write(f"### 📅 **Predicted Average Closing Price in 3 Months**: **${predicted_price:.2f} USD**")
 
-    last_sequence = X_test_scaled[-seq_length:]
-    last_sequence = np.expand_dims(last_sequence, axis=0)  # Shape (1, seq_length, features)
-    future_pred = best_model.predict(last_sequence)[0]
+    # 10. Plot Last 6 Months Actual vs Forecasted
+    st.write("## Last 6 Months: Actual vs. Predicted Prices")
 
-    # Predict the date ~3 months ahead
-    last_date = X_test.index[-1]
-    future_date = last_date + pd.Timedelta(days=horizon_days)
-
-    st.write(f"**Predicted Closing Price on {future_date.date()}**: **${future_pred:.2f} USD**")
-
-    # 13. Plot Future Prediction on Top of Historical Data
-    st.write("## 📊 Historical Prices with Future Prediction")
-
-    # Get the last 6 months of data for reference
-    six_months_ago = pd.Timestamp(end_date - timedelta(days=6*30))  # Corrected to pd.Timestamp
-    historical_df = data[data.index >= six_months_ago]
+    # Define the period for the last 6 months
+    six_months_ago = end_date - timedelta(days=6*30)  # Approx. 6 months
+    mask = (forecast['ds'] >= six_months_ago) & (forecast['ds'] <= end_date + timedelta(days=90))
+    plot_forecast = forecast.loc[mask]
 
     fig2, ax2 = plt.subplots(figsize=(14, 7))
-    ax2.plot(historical_df.index, historical_df['Close'], label='Historical Close', color='blue')
-    ax2.scatter(future_date, future_pred, label='3-Month Prediction', color='green', marker='X', s=100)
-    ax2.set_title(f"{selected_ticker} - Historical Prices with 3-Month Prediction")
+    ax2.plot(df_prophet['ds'], df_prophet['y'], label='Historical Price', color='blue')
+    ax2.plot(plot_forecast['ds'], plot_forecast['yhat'], label='Forecasted Price', color='red')
+    ax2.fill_between(plot_forecast['ds'], plot_forecast['yhat_lower'], plot_forecast['yhat_upper'], 
+                    color='pink', alpha=0.3, label='Confidence Interval')
+    ax2.set_title(f"{selected_ticker} - Last 6 Months: Actual vs. Forecasted Prices")
     ax2.set_xlabel("Date")
     ax2.set_ylabel("Price (USD)")
     ax2.legend()
-    ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
     ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
     plt.xticks(rotation=45)
     plt.tight_layout()
+
     st.pyplot(fig2)
 
 if __name__ == "__main__":
