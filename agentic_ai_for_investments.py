@@ -177,38 +177,117 @@ def main():
         main()
     ```
 
-### **c. Key Corrections and Enhancements**
+### **Key Corrections and Enhancements**
 
-1. **Proper Commenting:**
-   - All comments start with `#` and are placed outside of string literals.
-   - Ensured that no comments are inside multi-line strings or inadvertently part of the code strings.
+1. **Proper Commenting and Removal of Markdown Syntax:**
+    - All comments within the code are prefixed with `#`.
+    - Removed any bullet points or Markdown syntax from the code to prevent Python from misinterpreting them as code.
+    - Ensured that explanatory texts are either within comment lines or in Markdown outside of code blocks.
 
 2. **Enhanced Error Handling:**
-   - **Data Fetching Errors:** Wrapped the data fetching function in a `try-except` block to catch and display errors related to data retrieval.
-   - **Data Integrity Checks:** After renaming columns, the code checks for the existence of `'Date'` and `'Close'` columns. It also handles non-numeric `'y'` values gracefully by converting them and dropping problematic rows.
-   - **Model Fitting and Prediction Errors:** Wrapped the Prophet model fitting and prediction steps in `try-except` blocks to catch and display any errors that may occur during these processes.
+    - **Data Fetching Errors:** Wrapped the data fetching in a `try-except` block to catch and display errors if `yfinance` fails.
+    - **Data Integrity Checks:** After renaming columns, checked for the existence of `'Date'` and `'Close'` columns. Converted `'y'` to numeric and handled non-numeric entries by dropping them and notifying the user.
+    - **Model Fitting and Prediction Errors:** Wrapped Prophet model fitting and prediction steps in `try-except` blocks to catch and display any errors.
+    - **Forecast Data Availability:** Added checks to ensure there's sufficient forecasted data to plot the last 6 months' comparison.
 
-3. **User Interface (UI) Enhancements:**
-   - **Available Tickers Sidebar:** Clearly lists available tickers with their corresponding company names to guide users.
-   - **Ticker Input Field:** Allows users to enter any ticker symbol, not limited to the predefined list. However, it validates the input against the `AVAILABLE_TICKERS` dictionary to ensure correctness.
-   - **Forecast Button:** Users must click the **"Forecast 3-Month Price"** button to initiate the forecasting process, preventing automatic runs on every input change.
+3. **User Interface (UI) Improvements:**
+    - **Available Tickers Sidebar:** Clearly lists available tickers with their corresponding company names to guide users.
+    - **Ticker Input Field:** Provides a text input for users to enter any ticker symbol, validated against the predefined `AVAILABLE_TICKERS` list.
+    - **Forecast Button:** Users must click the **"Forecast 3-Month Price"** button to initiate the forecasting process, preventing automatic runs on every input change.
 
-4. **Visualization Improvements:**
-   - **Confidence Intervals:** Added shaded areas representing Prophet's confidence intervals for better visualization of uncertainty.
-   - **Date Formatting:** Improved date labels on the x-axis for clarity and readability.
-   - **Separate Plots:** Created two distinct plots:
-     - **Overall Forecast:** Shows historical data, forecasted prices, and confidence intervals.
-     - **Last 6 Months Comparison:** Provides a focused view comparing the last 6 months' actual prices with forecasted prices.
+4. **Visualization Enhancements:**
+    - **Confidence Intervals:** Added shaded areas representing Prophet's confidence intervals for better visualization of uncertainty.
+    - **Date Formatting:** Improved date labels on the x-axis for clarity and readability.
+    - **Separate Plots:** Created two distinct plots:
+        - **Overall Forecast:** Shows historical data, forecasted prices, and confidence intervals.
+        - **Last 6 Months Comparison:** Provides a focused view comparing the last 6 months' actual prices with forecasted prices.
 
 5. **Streamlit Best Practices:**
-   - **Explicit Figure Passing:** Passed the `figure` object directly to `st.pyplot(fig)` to adhere to Streamlit's latest best practices, avoiding the need for deprecated options.
-   - **Caching:** Utilized `@st.cache_data` to cache fetched data, reducing load times for repeated ticker forecasts.
+    - **Explicit Figure Passing:** Passed the `figure` object directly to `st.pyplot(fig)` to adhere to Streamlit's latest best practices, avoiding the need for deprecated options.
+    - **Caching:** Utilized `@st.cache_data` to cache fetched data, reducing load times for repeated ticker forecasts.
 
-## **3. Running the Corrected App**
+### **3. Running the Corrected Streamlit App**
 
 1. **Ensure Dependencies are Installed:**
+    
+    Make sure all required libraries are installed. If you created the `requirements.txt`, run:
+    
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+    *Note: If you encounter issues installing `prophet`, consider using `conda` or refer to [Prophet's official installation guide](https://facebook.github.io/prophet/docs/installation.html).*
 
-   Make sure all required libraries are installed. If you created the `requirements.txt`, run:
+2. **Save the Corrected Code:**
+    
+    Save the provided `app.py` code in your project directory.
 
-   ```bash
-   pip install -r requirements.txt
+3. **Run the Streamlit App:**
+    
+    In your terminal, navigate to the project directory and execute:
+    
+    ```bash
+    streamlit run app.py
+    ```
+    
+4. **Interact with the App:**
+    
+    - **Enter a Stock Ticker:** In the main interface, input a stock ticker symbol (e.g., `AAPL`, `GOOGL`).
+    - **Click the Forecast Button:** Press the **"Forecast 3-Month Price"** button to initiate data fetching and forecasting.
+    - **View Results:** Observe the forecasted price and the comparison graphs.
+
+### **4. Additional Recommendations**
+
+1. **Validate Data Before Processing:**
+    
+    While the app now includes robust error handling, it's good practice to validate the data's integrity before proceeding with forecasting. Consider adding more checks if necessary.
+
+2. **Improve User Experience:**
+    
+    - **Autocomplete for Tickers:** Implement an autocomplete feature for ticker input to guide users.
+    - **Download Forecast Data:** Allow users to download the forecasted data as a CSV file.
+    
+    ```python
+    st.download_button(
+        label="Download Forecast Data",
+        data=forecast.to_csv(index=False),
+        file_name=f"{ticker_input}_forecast.csv",
+        mime='text/csv',
+    )
+    ```
+
+3. **Optimize Performance:**
+    
+    - **Caching Prophet Models:** Prophet models can be computationally intensive. If you plan to allow multiple forecasts for the same ticker, consider caching the fitted model to avoid retraining.
+    
+    ```python
+    @st.cache_resource
+    def get_prophet_model(df):
+        model = Prophet(daily_seasonality=False, yearly_seasonality=True, weekly_seasonality=True)
+        model.fit(df)
+        return model
+    ```
+    
+    Then use:
+    
+    ```python
+    model = get_prophet_model(df_prophet)
+    ```
+
+4. **Interactive Plots:**
+    
+    Utilize interactive plotting libraries like Plotly for enhanced user interaction.
+
+5. **Regular Updates:**
+    
+    Periodically update the app and retrain models with the latest data to maintain forecast accuracy.
+
+### **5. Final Notes**
+
+- **Model Limitations:** Stock price forecasting is inherently uncertain due to market volatility and numerous external factors. While Prophet can capture trends and seasonality, it cannot account for sudden market shifts or unforeseen events.
+
+- **Continuous Improvement:** Regularly update the app based on user feedback and evolving requirements to enhance functionality and user experience.
+
+- **User Feedback:** Encourage users to provide feedback to continually refine and improve the app's functionality and user experience.
+
+By following the corrected code and these guidelines, your Streamlit app should function correctly, allowing you to input any valid ticker symbol, perform forecasting, and visualize the results without encountering syntax or runtime errors. If you continue to experience issues, please provide the updated error messages or specific sections of your code where the errors occur, and I'll be happy to assist further!
