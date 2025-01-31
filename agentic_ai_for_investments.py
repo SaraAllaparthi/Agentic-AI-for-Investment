@@ -13,6 +13,7 @@ from xgboost import XGBRegressor
 
 import matplotlib.dates as mdates
 
+
 # Caching the ticker list to speed up the app
 @st.cache_data
 def load_ticker_list():
@@ -200,21 +201,20 @@ def main():
 
     future_pred = best_model.predict(last_row_scaled)[0]
 
-    # Optionally, you can extend predictions iteratively for multiple days
-    # For simplicity, we're predicting a single point ~3 months ahead
-
-    st.write(f"**Predicted Closing Price ~3 Months After {selected_ticker} on {y_test.index[-1].date() + timedelta(days=63)}**: **${future_pred:.2f}**")
+    # Display the predicted share price for next 3 months
+    future_date = y_test.index[-1] + pd.Timedelta(days=horizon_days)
+    st.write(f"**Predicted Closing Price ~3 Months After {future_date.date()}**: **${future_pred:.2f}**")
 
     # 12. Plot Future Prediction on Top of Historical Data
     st.write("## 📊 Historical Prices with Future Prediction")
 
     # Get the last 6 months of data for reference
-    six_months_ago = end_date - timedelta(days=6*30)  # Approx. 6 months
+    six_months_ago = pd.Timestamp(end_date - timedelta(days=6*30))  # Corrected to pd.Timestamp
     historical_df = data[data.index >= six_months_ago]
 
     fig2, ax2 = plt.subplots(figsize=(14, 7))
     ax2.plot(historical_df.index, historical_df['Close'], label='Historical Close', color='blue')
-    ax2.scatter(y_test.index[-1] + timedelta(days=63), future_pred, label='3-Month Prediction', color='green', marker='X', s=100)
+    ax2.scatter(future_date, future_pred, label='3-Month Prediction', color='green', marker='X', s=100)
     ax2.set_title(f"{selected_ticker} - Historical Prices with 3-Month Prediction")
     ax2.set_xlabel("Date")
     ax2.set_ylabel("Price (USD)")
