@@ -3,40 +3,44 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from datetime import date, timedelta
 
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
+
+import matplotlib.dates as mdates
 
 
 def main():
-    st.title("3-Month Ahead Stock Price - Ensemble Prediction")
+    st.title("Next-Day Stock Price Prediction (Linear, Ridge, Random Forest)")
 
-    # Text input for ticker
-    ticker_symbol = st.text_input("Enter a stock ticker (e.g., AAPL, TSLA):", value="AAPL")
+    # Ticker input
+    ticker = st.text_input("Enter a stock ticker (e.g., AAPL):", value="AAPL")
 
-    if st.button("Predict 3-Month Price"):
-        # 1) Download last 3 years of data
+    if st.button("Predict Next-Day Price"):
+        # 1) Fetch Data (last 3 years)
         end_date = date.today()
         start_date = end_date - timedelta(days=3*365)
-        df = yf.download(ticker_symbol, start=start_date, end=end_date)
+        df = yf.download(ticker, start=start_date, end=end_date)
 
         if df.empty:
-            st.error("No data found. Please try a different ticker or date range.")
+            st.error("No data found. Please try another ticker.")
             return
 
         # 2) Feature Engineering
         df = df.dropna().copy()
         df.sort_index(inplace=True)
 
-        df['MA10'] = df['Close'].rolling(10).mean()
-        df['MA50'] = df['Close'].rolling(50).mean()
+        # Example indicators
+        df['MA10'] = df['Close'].rolling(window=10).mean()
 
         # RSI
         delta = df['Close'].diff()
         up = delta.clip(lower=0)
-        down = (-1 * delta).clip(lower=0)
+        down = (-1*delta).clip(lower=0)
         ema_up = up.ewm(com=13, adjust=False).mean()
         ema_down = down.ewm(com=13, adjust=False).mean()
         rs = ema_up / ema_down
@@ -49,81 +53,84 @@ def main():
 
         df.dropna(inplace=True)
 
-        # 3) Define Target for ~3 months (~63 trading days)
-        horizon_days = 63
-        df['Target'] = df['Close'].shift(-horizon_days)
-        df.dropna(inplace=True)  # Remove rows that don't have a target
+        # 3) Define Target as Next-Day Close
+        df['Target'] = df['Close'].shift(-1)
 
-        # 4) Select features & time-based split
-        X_cols = ['Close', 'MA10', 'MA50', 'RSI', 'MACD']
-        X = df[X_cols]
+        # Shift features by 1 day so we only use "yesterday's" data
+        feature_cols = ['Close', 'MA10', 'RSI', 'MACD']  # or add 'MA50' if you like
+        for col in feature_cols:
+            df[col] = df[col].shift(1)
+        df.dropna(inplace=True)
+
+        # 4) Split Data (time-based 80% / 20%)
+        # We'll avoid using shuffle=True because it's time series
+        X = df[feature_cols]
         y = df['Target']
 
-        split_idx = int(len(df) * 0.8)
-        train_data = df.iloc[:split_idx]
-        test_data  = df.iloc[split_idx:]
-
-        X_train = train_data[X_cols]
-        y_train = train_data['Target']
-        X_test  = test_data[X_cols]
-        y_test  = test_data['Target']
+        split_idx = int(len(df)*0.8)
+        X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+        y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
         if len(X_test) == 0:
-            st.warning("Not enough data for a test set. Try a different ticker or date range.")
+            st.warning("Not enough data for a test set. Adjust your date range.")
             return
 
-        # 5) Scale the features
-        scaler = MinMaxScaler()
-        scaler.fit(X_train)
-        X_train_scaled = scaler.transform(X_train)
-        X_test_scaled  = scaler.transform(X_test)
-
-        # 6) Build 3 models & average predictions
-        #    (You can tune hyperparameters more if desired)
+        # 5) Train Models
+        # a) Linear Regression
         lr_model = LinearRegression()
-        rdg_model = Ridge(alpha=1.0)
-        rf_model = RandomForestRegressor(n_estimators=50, max_depth=8, random_state=42)  # smaller model for speed
+        lr_model.fit(X_train, y_train)
+        lr_predictions = lr_model.predict(X_test)
 
-        lr_model.fit(X_train_scaled, y_train)
-        rdg_model.fit(X_train_scaled, y_train)
-        rf_model.fit(X_train_scaled, y_train)
+        # b) Ridge
+        ridge_model = Ridge(alpha=1.0)
+        ridge_model.fit(X_train, y_train)
+        ridge_predictions = ridge_model.predict(X_test)
 
-        lr_pred_test = lr_model.predict(X_test_scaled)
-        rdg_pred_test = rdg_model.predict(X_test_scaled)
-        rf_pred_test = rf_model.predict(X_test_scaled)
+        # c) Random Forest
+        rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+        rf_model.fit(X_train, y_train)
+        rf_predictions = rf_model.predict(X_test)
 
-        # Ensemble test predictions
-        ensemble_test_pred = (lr_pred_test + rdg_pred_test + rf_pred_test) / 3.0
-
-        # 7) Plot Actual vs. Predicted on Test
+        # 6) Plot Results: Actual vs. Predictions
         plot_df = pd.DataFrame({
-            'Actual': y_test,
-            'Predicted': ensemble_test_pred
-        }, index=y_test.index)
+            'Date': X_test.index,
+            'Actual Price': y_test.values,
+            'Linear Regression Prediction': lr_predictions,
+            'Ridge Regression Prediction': ridge_predictions,
+            'Random Forest Prediction': rf_predictions
+        })
+        plot_df.set_index('Date', inplace=True)
 
-        fig, ax = plt.subplots(figsize=(10,4))
-        ax.plot(plot_df.index, plot_df['Actual'], label='Actual (Test)', color='blue')
-        ax.plot(plot_df.index, plot_df['Predicted'], label='Predicted (Test)', color='red')
-        ax.set_title(f"{ticker_symbol} - ~3 Month Ahead Ensemble Prediction")
+        fig, ax = plt.subplots(figsize=(14, 7))
+
+        # Plot actual
+        ax.plot(plot_df.index, plot_df['Actual Price'],
+                label='Actual Price', color='blue')
+        # LR
+        ax.plot(plot_df.index, plot_df['Linear Regression Prediction'],
+                label='Linear Regression', color='red')
+        # Ridge
+        ax.plot(plot_df.index, plot_df['Ridge Regression Prediction'],
+                label='Ridge Regression', color='orange')
+        # RF
+        ax.plot(plot_df.index, plot_df['Random Forest Prediction'],
+                label='Random Forest', color='green')
+
+        ax.set_title(f"{ticker} - Next-Day Closing Price Predictions")
         ax.set_xlabel("Date")
         ax.set_ylabel("Price (USD)")
         ax.legend()
+
+        # Improve date formatting
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
         plt.xticks(rotation=45)
+        plt.tight_layout()
+
         st.pyplot(fig)
 
-        # 8) Single Future Prediction from last row
-        last_feats = df.iloc[[-1]][X_cols]
-        last_scaled = scaler.transform(last_feats)
-        lr_future  = lr_model.predict(last_scaled)
-        rdg_future = rdg_model.predict(last_scaled)
-        rf_future  = rf_model.predict(last_scaled)
-        ensemble_future = (lr_future + rdg_future + rf_future) / 3.0
-        future_val = ensemble_future[0]
-
-        st.write(f"**Predicted Price ~3 Months After Last Date**: {future_val:.2f} USD")
-
     else:
-        st.info("Enter a ticker and click 'Predict 3-Month Price' to run the model.")
+        st.info("Enter a ticker and click 'Predict Next-Day Price' to start.")
 
 if __name__ == "__main__":
     main()
