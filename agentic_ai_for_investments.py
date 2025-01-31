@@ -3,164 +3,146 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from datetime import date, timedelta
 
+# Sklearn libraries for Linear Regression
 from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import MinMaxScaler
-from xgboost import XGBRegressor
+
 
 def main():
-    st.title("Faster Multi-Horizon Prediction (Reduced Data & Estimators)")
-    
-    st.markdown("""
-    **Changes** for speed:
-    - **2 years** of data instead of 3.
-    - **20 trees** (n_estimators=20) in RandomForest and XGBoost (down from 100).
-    - 4 horizons, 3-model ensemble, but lighter training.
+    st.title("Linear Regression - Next Day Stock Price Prediction")
 
-    **Disclaimer**: For informational purposes only, not financial advice.
+    st.markdown("""
+    **Goal**: Predict the **next day’s closing price** using a **Linear Regression** model.
+
+    **Key Steps**:
+    - Fetch last 3 years of data from Yahoo Finance.
+    - Create technical indicators (MA10, MA50, RSI, MACD).
+    - Define target as *next day’s close*.
+    - Train/test split (80% train, 20% test).
+    - Evaluate & visualize predictions vs. actual values on the test set.
+    
+    **Disclaimer**: This is for **informational purposes only**, not financial advice.
     """)
 
-    ticker = st.text_input("Enter a stock ticker:", value="AAPL")
-    if st.button("Predict"):
-        if not ticker:
-            st.error("Please enter a ticker.")
+    # 1) Sidebar Ticker Input
+    st.sidebar.header("Select Stock Ticker")
+    ticker_symbol = st.sidebar.text_input("Enter a valid ticker (e.g. AAPL, TSLA):", value="AAPL")
+
+    if st.sidebar.button("Run Prediction"):
+        if not ticker_symbol:
+            st.error("Please enter a ticker symbol.")
             return
-        
-        st.write(f"Fetching last 2 years of data for {ticker}...")
-        end_date = date.today()
-        start_date = end_date - timedelta(days=2*365)  # 2 years
-        df = yf.download(ticker, start=start_date, end=end_date)
-        
+
+        # 2) Download Data
+        with st.spinner("Fetching data from Yahoo Finance..."):
+            end_date = date.today()
+            start_date = end_date - timedelta(days=3*365)  # last 3 years
+            df = yf.download(ticker_symbol, start=start_date, end=end_date)
+
         if df.empty:
-            st.error("No data. Try another ticker or adjust date range.")
+            st.error("No data found. Check the ticker symbol or try later.")
             return
-        
-        df_feat = feature_engineering(df)
-        
-        # Horizons
-        horizon_map = {
-            'Next_Day': 1,
-            'Next_Week': 5,
-            'Next_Month': 21,
-            'Next_6Months': 126
-        }
-        
-        for hname, shift_val in horizon_map.items():
-            df_feat[hname] = df_feat['Close'].shift(-shift_val)
-        df_feat.dropna(inplace=True)
-        
-        if len(df_feat) < 50:
-            st.warning("Not enough rows left after shifting.")
+
+        # 3) Feature Engineering
+        df = feature_engineering(df)
+
+        # 4) Define Target (Next Day Close)
+        df['Target'] = df['Close'].shift(-1)
+        df.dropna(inplace=True)
+
+        # Shift features by 1 day to ensure only past data is used
+        shifted_features = ['Close', 'MA10', 'MA50', 'RSI', 'MACD']
+        for col in shifted_features:
+            df[col] = df[col].shift(1)
+        df.dropna(inplace=True)
+
+        # 5) Split Data
+        features = ['Close', 'MA10', 'MA50', 'RSI', 'MACD']
+        X = df[features]
+        y = df['Target']
+
+        train_size = int(len(df)*0.8)
+        X_train, X_test = X.iloc[:train_size], X.iloc[train_size:]
+        y_train, y_test = y.iloc[:train_size], y.iloc[train_size:]
+
+        if len(X_test) == 0:
+            st.warning("Not enough data for a test set. Try a different ticker or more data.")
             return
-        
-        X_cols = ['Close','MA10','MA50','RSI','MACD']
-        
-        # Time-based split (80% train, 20% test)
-        train_size = int(len(df_feat)*0.8)
-        train_data = df_feat.iloc[:train_size]
-        test_data  = df_feat.iloc[train_size:]
-        
-        scaler = MinMaxScaler()
-        scaler.fit(df_feat[X_cols])
-        
-        X_train_scaled = scaler.transform(train_data[X_cols])
-        X_test_scaled  = scaler.transform(test_data[X_cols])
-        
-        test_index = test_data.index
-        
-        # We'll store predictions in the dataframe for plotting
-        for hname in horizon_map:
-            df_feat[f"Pred_{hname}"] = np.nan
-        
-        # For final forward prediction
-        last_row_features = df_feat.iloc[[-1]][X_cols]
-        X_last_scaled = scaler.transform(last_row_features)
-        
-        future_preds = {}
-        
-        for hname, shift_val in horizon_map.items():
-            st.write(f"### Horizon: {hname}")
-            
-            y_train = train_data[hname]
-            y_test  = test_data[hname]
-            
-            # Subsets for train/test
-            X_train = X_train_scaled[:len(y_train)]
-            X_test  = X_test_scaled[len(y_train):]
-            
-            # Light ensemble
-            lr  = LinearRegression()
-            rf  = RandomForestRegressor(n_estimators=20, random_state=42)  # fewer trees
-            xgb = XGBRegressor(n_estimators=20, random_state=42, verbosity=0)
-            
-            lr.fit(X_train, y_train)
-            rf.fit(X_train, y_train)
-            xgb.fit(X_train, y_train)
-            
-            # Predict on test
-            lr_pred  = lr.predict(X_test)
-            rf_pred  = rf.predict(X_test)
-            xgb_pred = xgb.predict(X_test)
-            
-            ensemble_test_pred = (lr_pred + rf_pred + xgb_pred)/3
-            
-            # Store in df
-            df_feat.loc[test_index, f"Pred_{hname}"] = ensemble_test_pred
-            
-            # Plot
-            plot_test_predictions(hname, y_test, ensemble_test_pred, test_index)
-            
-            # Future
-            lr_fut  = lr.predict(X_last_scaled)
-            rf_fut  = rf.predict(X_last_scaled)
-            xgb_fut = xgb.predict(X_last_scaled)
-            fut_ensemble = (lr_fut + rf_fut + xgb_fut)/3
-            future_preds[hname] = fut_ensemble[0]
-        
-        # Show final numeric
-        st.write("## Future Predictions (After Last Known Date)")
-        for hname in horizon_map:
-            st.write(f"- **{hname}**: {future_preds[hname]:.2f} USD")
-        
+
+        # Optional: scale data (comment out if not needed)
+        # scaler = MinMaxScaler()
+        # X_train_scaled = scaler.fit_transform(X_train)
+        # X_test_scaled = scaler.transform(X_test)
+
+        # 6) Train Linear Regression
+        lr_model = LinearRegression()
+        lr_model.fit(X_train, y_train)
+
+        # Predict on test set
+        lr_predictions = lr_model.predict(X_test)
+
+        # Evaluate
+        lr_mse = mean_squared_error(y_test, lr_predictions)
+        lr_r2  = r2_score(y_test, lr_predictions)
+
+        # 7) Display Results
+        st.subheader("Model Evaluation")
+        st.write(f"**Test MSE**: {lr_mse:.2f}")
+        st.write(f"**Test R²**: {lr_r2:.4f}")
+
+        # 8) Plot Actual vs. Predicted
+        st.subheader("Test Set: Actual vs. Predicted")
+        plot_df = pd.DataFrame({
+            'Actual': y_test.values,
+            'Predicted': lr_predictions
+        }, index=y_test.index)
+
+        plt.figure(figsize=(12, 5))
+        plt.plot(plot_df.index, plot_df['Actual'], label='Actual', color='blue')
+        plt.plot(plot_df.index, plot_df['Predicted'], label='Predicted', color='red')
+        plt.title(f"{ticker_symbol} - Next Day Close: Actual vs. Predicted")
+        plt.xlabel("Date")
+        plt.ylabel("Price (USD)")
+        plt.legend()
+        plt.xticks(rotation=45)
+        st.pyplot()
+
     else:
-        st.info("Enter a ticker, then click Predict.")
+        st.info("Configure a ticker in the sidebar and click 'Run Prediction' to start.")
 
 def feature_engineering(df):
+    """
+    Add technical indicators: MA10, MA50, RSI, MACD.
+    Drop rows with NA afterwards.
+    """
     df = df.copy()
     df.dropna(inplace=True)
     df.sort_index(inplace=True)
-    
-    df['MA10'] = df['Close'].rolling(10).mean()
-    df['MA50'] = df['Close'].rolling(50).mean()
-    
+
+    # MA10, MA50
+    df['MA10'] = df['Close'].rolling(window=10).mean()
+    df['MA50'] = df['Close'].rolling(window=50).mean()
+
+    # RSI
     delta = df['Close'].diff()
     up = delta.clip(lower=0)
-    down = -1*delta.clip(upper=0)
+    down = -1 * delta.clip(upper=0)
     ema_up = up.ewm(com=13, adjust=False).mean()
     ema_down = down.ewm(com=13, adjust=False).mean()
-    rs = ema_up/ema_down
+    rs = ema_up / ema_down
     df['RSI'] = 100 - (100/(1+rs))
-    
+
+    # MACD
     ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema_12 - ema_26
-    
+
     df.dropna(inplace=True)
     return df
-
-def plot_test_predictions(horizon_name, y_test, pred, test_index):
-    st.write(f"**Backtest: {horizon_name}** - Actual vs. Ensemble Prediction")
-    fig, ax = plt.subplots(figsize=(8,3))
-    actual = y_test.values
-    ax.plot(test_index, actual, label='Actual', color='blue')
-    ax.plot(test_index, pred, label='Predicted', color='red')
-    ax.set_title(f"{horizon_name}: Actual vs. Predicted")
-    ax.legend()
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    st.pyplot(fig)
 
 if __name__ == "__main__":
     main()
