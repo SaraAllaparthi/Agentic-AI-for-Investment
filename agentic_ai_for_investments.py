@@ -10,7 +10,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import MinMaxScaler
 from xgboost import XGBRegressor
 
-
 def main():
     st.title("Faster Multi-Horizon Prediction (Reduced Data & Estimators)")
     
