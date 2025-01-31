@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 from datetime import date, timedelta
 from prophet import Prophet
@@ -35,7 +34,7 @@ st.sidebar.write("Enter a ticker symbol from the list below:")
 for ticker, name in AVAILABLE_TICKERS.items():
     st.sidebar.write(f"**{ticker}**: {name}")
 
-# Function to fetch data
+# Function to fetch data with error handling
 @st.cache_data(show_spinner=False)
 def fetch_data(ticker, start_date, end_date):
     try:
@@ -178,76 +177,36 @@ def main():
         main()
     ```
 
-#### **c. Explanation of the Corrections and Enhancements**
+### **c. Key Corrections and Enhancements**
 
-1. **Improved Error Handling**:
-    - **Fetching Data**:
-        ```python
-        try:
-            df_prophet = data.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
-        except KeyError:
-            st.error("The fetched data does not contain 'Date' or 'Close' columns. Please try a different ticker.")
-            return
-        ```
-        Ensures that the necessary columns `'Date'` and `'Close'` exist in the fetched data.
+1. **Proper Commenting:**
+   - All comments start with `#` and are placed outside of string literals.
+   - Ensured that no comments are inside multi-line strings or inadvertently part of the code strings.
 
-    - **Converting 'y' to Numeric**:
-        ```python
-        df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
-        df_prophet.dropna(inplace=True)  # Drop rows with non-numeric 'y'
-        
-        if df_prophet.empty:
-            st.error("Insufficient numeric data after processing. Please try a different ticker.")
-            return
-        elif final_length < initial_length:
-            st.warning(f"Dropped {initial_length - final_length} rows due to non-numeric 'Close' values.")
-        ```
-        Converts the `'y'` column to numeric and handles non-numeric entries gracefully by dropping them and notifying the user.
+2. **Enhanced Error Handling:**
+   - **Data Fetching Errors:** Wrapped the data fetching function in a `try-except` block to catch and display errors related to data retrieval.
+   - **Data Integrity Checks:** After renaming columns, the code checks for the existence of `'Date'` and `'Close'` columns. It also handles non-numeric `'y'` values gracefully by converting them and dropping problematic rows.
+   - **Model Fitting and Prediction Errors:** Wrapped the Prophet model fitting and prediction steps in `try-except` blocks to catch and display any errors that may occur during these processes.
 
-    - **Prophet Model Fitting and Prediction**:
-        Wrapped in `try-except` blocks to catch and display any errors during model fitting and prediction.
+3. **User Interface (UI) Enhancements:**
+   - **Available Tickers Sidebar:** Clearly lists available tickers with their corresponding company names to guide users.
+   - **Ticker Input Field:** Allows users to enter any ticker symbol, not limited to the predefined list. However, it validates the input against the `AVAILABLE_TICKERS` dictionary to ensure correctness.
+   - **Forecast Button:** Users must click the **"Forecast 3-Month Price"** button to initiate the forecasting process, preventing automatic runs on every input change.
 
-    - **Forecast Data Availability**:
-        ```python
-        if plot_forecast.empty:
-            st.warning("Not enough forecasted data to display the last 6 months comparison.")
-            return
-        ```
-        Ensures that there's enough data to plot the last 6 months comparison.
+4. **Visualization Improvements:**
+   - **Confidence Intervals:** Added shaded areas representing Prophet's confidence intervals for better visualization of uncertainty.
+   - **Date Formatting:** Improved date labels on the x-axis for clarity and readability.
+   - **Separate Plots:** Created two distinct plots:
+     - **Overall Forecast:** Shows historical data, forecasted prices, and confidence intervals.
+     - **Last 6 Months Comparison:** Provides a focused view comparing the last 6 months' actual prices with forecasted prices.
 
-2. **User Interface Enhancements**:
-    - **Page Configuration**:
-        ```python
-        st.set_page_config(
-            page_title="Stock Price Forecasting",
-            layout="wide",
-            initial_sidebar_state="expanded",
-        )
-        ```
-        Sets the page title, layout, and initial sidebar state for a better user experience.
+5. **Streamlit Best Practices:**
+   - **Explicit Figure Passing:** Passed the `figure` object directly to `st.pyplot(fig)` to adhere to Streamlit's latest best practices, avoiding the need for deprecated options.
+   - **Caching:** Utilized `@st.cache_data` to cache fetched data, reducing load times for repeated ticker forecasts.
 
-    - **Available Tickers Sidebar**:
-        Clearly lists available tickers with their corresponding company names to guide users.
+## **3. Running the Corrected App**
 
-    - **Input Field and Button**:
-        Provides a text input for the ticker symbol and a button to initiate forecasting.
-
-3. **Ensuring 'y' is a Series**:
-    - By selecting a single column `['y']` from the DataFrame, we ensure that `df_prophet['y']` is a Pandas Series, which is compatible with `pd.to_numeric`.
-    - Additional error checks confirm that after processing, `df_prophet` is not empty.
-
-4. **Visualization Enhancements**:
-    - **Confidence Intervals**: Added shaded areas representing Prophet's confidence intervals.
-    - **Date Formatting**: Improved date labels for clarity.
-    - **Figure Passing**: Explicitly passes the `figure` object to `st.pyplot(fig)` to adhere to Streamlit's latest best practices.
-
-5. **Streamlined Flow**:
-    - The app only proceeds with forecasting when the user clicks the **"Forecast 3-Month Price"** button.
-    - Early returns prevent the app from attempting to process invalid inputs or insufficient data.
-
-### **3. Running the Corrected Streamlit App**
-
-1. **Ensure Dependencies are Installed**
+1. **Ensure Dependencies are Installed:**
 
    Make sure all required libraries are installed. If you created the `requirements.txt`, run:
 
