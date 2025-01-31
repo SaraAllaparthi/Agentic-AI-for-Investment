@@ -11,7 +11,6 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 
 import matplotlib.dates as mdates
 
-
 # Caching the ticker list to speed up the app
 @st.cache_data
 def load_ticker_list():
