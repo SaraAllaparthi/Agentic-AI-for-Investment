@@ -9,142 +9,160 @@ from prophet import Prophet
 
 import matplotlib.dates as mdates
 
-# Remove or comment out the problematic line
-# st.set_option('deprecation.showPyplotGlobalUse', False)
+# Set Streamlit page configuration
+st.set_page_config(
+    page_title="Stock Price Forecasting",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# Caching the ticker list to speed up the app
-@st.cache_data
-def load_ticker_list():
-    # Curated list of tickers
-    ticker_dict = {
-        "AAPL": "Apple Inc.",
-        "GOOGL": "Alphabet Inc. (Google)",
-        "AMZN": "Amazon.com, Inc.",
-        "MSFT": "Microsoft Corporation",
-        "TSLA": "Tesla, Inc.",
-        "META": "Meta Platforms, Inc. (Facebook)",
-        "NFLX": "Netflix, Inc.",
-        "NVDA": "NVIDIA Corporation",
-        "JPM": "JPMorgan Chase & Co.",
-        "V": "Visa Inc.",
-        # Add more tickers as needed
-    }
-    return ticker_dict
+# Define a dictionary of available tickers for reference
+AVAILABLE_TICKERS = {
+    "AAPL": "Apple Inc.",
+    "GOOGL": "Alphabet Inc. (Google)",
+    "AMZN": "Amazon.com, Inc.",
+    "MSFT": "Microsoft Corporation",
+    "TSLA": "Tesla, Inc.",
+    "META": "Meta Platforms, Inc. (Facebook)",
+    "NFLX": "Netflix, Inc.",
+    "NVDA": "NVIDIA Corporation",
+    "JPM": "JPMorgan Chase & Co.",
+    "V": "Visa Inc.",
+    # Add more tickers as needed
+}
 
-# Caching the data fetching to prevent redundant downloads
-@st.cache_data
+# Sidebar: Display available tickers
+st.sidebar.header("Available Tickers")
+st.sidebar.write("Enter a ticker symbol from the list below:")
+for ticker, name in AVAILABLE_TICKERS.items():
+    st.sidebar.write(f"**{ticker}**: {name}")
+
+# Function to fetch data
+@st.cache_data(show_spinner=False)
 def fetch_data(ticker, start_date, end_date):
     df = yf.download(ticker, start=start_date, end=end_date)
     return df
 
 def main():
     st.title("📈 Stock Price Forecasting - Next 3 Months")
-
+    
     st.markdown("""
     **Disclaimer**: This application is for **informational purposes only** and does **not** constitute financial advice. 
     Always do your own research or consult a professional before making investment decisions.
     """)
 
-    # 1. Sidebar for Ticker Selection
-    st.sidebar.header("Select Stock")
-    ticker_dict = load_ticker_list()
-    dropdown_options = [f"{name} ({ticker})" for ticker, name in ticker_dict.items()]
-    selected_option = st.sidebar.selectbox("Choose a stock:", dropdown_options)
-    selected_ticker = selected_option.split("(")[-1].replace(")", "").strip()
+    # Ticker input
+    ticker_input = st.text_input("Enter Stock Ticker Symbol (e.g., AAPL, GOOGL):", value="AAPL").upper().strip()
+    
+    # Button to initiate forecasting
+    if st.button("Forecast 3-Month Price"):
+        if ticker_input not in AVAILABLE_TICKERS:
+            st.error("Invalid ticker symbol. Please enter a valid ticker from the sidebar list.")
+            return
 
-    st.write(f"### Selected Stock: **{selected_option}**")
+        with st.spinner("Fetching data and performing forecasting..."):
+            end_date = date.today()
+            start_date = end_date - timedelta(days=3*365)  # Last 3 years
+            data = fetch_data(ticker_input, start_date, end_date)
+        
+        if data.empty:
+            st.error("No data found for the entered ticker. Please try a different ticker.")
+            return
 
-    # 2. Fetch Data
-    with st.spinner("Fetching historical data..."):
-        end_date = date.today()
-        start_date = end_date - timedelta(days=3*365)  # Last 3 years
-        data = fetch_data(selected_ticker, start_date, end_date)
+        # Prepare data for Prophet
+        df_prophet = data.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
 
-    if data.empty:
-        st.error("No data found. Please select a different ticker.")
-        return
+        # Ensure 'y' is numeric and handle any non-numeric entries
+        df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
+        df_prophet.dropna(inplace=True)  # Drop rows with non-numeric 'y'
 
-    st.success("Data fetched successfully!")
+        if df_prophet.empty:
+            st.error("Insufficient data after processing. Please try a different ticker.")
+            return
 
-    # 3. Prepare Data for Prophet
-    df_prophet = data.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
+        # Initialize and fit Prophet model
+        try:
+            model = Prophet(daily_seasonality=False, yearly_seasonality=True, weekly_seasonality=True)
+            model.fit(df_prophet)
+        except Exception as e:
+            st.error(f"An error occurred while fitting the Prophet model: {e}")
+            return
 
-    # 4. Ensure 'y' is numeric
-    df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
-    df_prophet.dropna(inplace=True)  # Drop rows with non-numeric 'y'
+        # Create future dataframe for 3 months (approx. 90 days)
+        future = model.make_future_dataframe(periods=90)
 
-    # 5. Initialize and Fit Prophet Model
-    model = Prophet(daily_seasonality=False, yearly_seasonality=True, weekly_seasonality=True)
-    model.fit(df_prophet)
+        # Make predictions
+        try:
+            forecast = model.predict(future)
+        except Exception as e:
+            st.error(f"An error occurred during prediction: {e}")
+            return
 
-    # 6. Create Future DataFrame for 3 Months (approx. 90 days)
-    future = model.make_future_dataframe(periods=90)
+        # Extract the predicted price 3 months ahead
+        predicted_price = forecast.iloc[-90:]['yhat'].mean()
 
-    # 7. Make Predictions
-    forecast = model.predict(future)
+        # Plotting: Actual vs Forecasted Prices
+        st.write("## Stock Price Forecast")
+        fig, ax = plt.subplots(figsize=(14, 7))
 
-    # 8. Extract the Predicted Price 3 Months Ahead
-    predicted_price = forecast.iloc[-90:]['yhat'].mean()
+        # Plot historical data
+        ax.plot(df_prophet['ds'], df_prophet['y'], label='Actual Price', color='blue')
 
-    # 9. Plotting
-    st.write("## Stock Price Forecast")
+        # Plot forecasted data
+        ax.plot(forecast['ds'], forecast['yhat'], label='Forecasted Price', color='red')
 
-    fig, ax = plt.subplots(figsize=(14, 7))
+        # Fill confidence interval
+        ax.fill_between(forecast['ds'], forecast['yhat_lower'], forecast['yhat_upper'], 
+                        color='pink', alpha=0.3, label='Confidence Interval')
 
-    # Plot historical data
-    ax.plot(df_prophet['ds'], df_prophet['y'], label='Actual Price', color='blue')
+        # Formatting the plot
+        ax.set_title(f"{AVAILABLE_TICKERS[ticker_input]} ({ticker_input}) - Actual vs. Forecasted Prices")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Price (USD)")
+        ax.legend()
 
-    # Plot forecast
-    ax.plot(forecast['ds'], forecast['yhat'], label='Forecasted Price', color='red')
+        # Improve date formatting on the x-axis
+        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        plt.xticks(rotation=45)
+        plt.tight_layout()
 
-    # Highlight the forecasted area
-    ax.fill_between(forecast['ds'], forecast['yhat_lower'], forecast['yhat_upper'], 
-                    color='pink', alpha=0.3, label='Confidence Interval')
+        # Pass the figure to st.pyplot
+        st.pyplot(fig)
 
-    # Formatting the plot
-    ax.set_title(f"{selected_ticker} - Actual vs. Forecasted Prices")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Price (USD)")
-    ax.legend()
+        # Display Predicted Price
+        st.write(f"### 📅 **Predicted Average Closing Price in 3 Months**: **${predicted_price:.2f} USD**")
 
-    # Improve date formatting on the x-axis
-    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+        # Plot Last 6 Months: Actual vs Forecasted
+        st.write("## Last 6 Months: Actual vs. Forecasted Prices")
+        six_months_ago = end_date - timedelta(days=6*30)  # Approx. 6 months
+        six_months_ago_pd = pd.Timestamp(six_months_ago)
 
-    # Pass the figure to st.pyplot
-    st.pyplot(fig)
+        mask = (forecast['ds'] >= six_months_ago_pd) & (forecast['ds'] <= end_date + timedelta(days=90))
+        plot_forecast = forecast.loc[mask]
 
-    # 10. Display Predicted Price
-    st.write(f"### 📅 **Predicted Average Closing Price in 3 Months**: **${predicted_price:.2f} USD**")
+        if plot_forecast.empty:
+            st.warning("Not enough forecasted data to display the last 6 months comparison.")
+            return
 
-    # 11. Plot Last 6 Months Actual vs Forecasted
-    st.write("## Last 6 Months: Actual vs. Forecasted Prices")
+        fig2, ax2 = plt.subplots(figsize=(14, 7))
+        ax2.plot(df_prophet['ds'], df_prophet['y'], label='Historical Price', color='blue')
+        ax2.plot(plot_forecast['ds'], plot_forecast['yhat'], label='Forecasted Price', color='red')
+        ax2.fill_between(plot_forecast['ds'], plot_forecast['yhat_lower'], plot_forecast['yhat_upper'], 
+                        color='pink', alpha=0.3, label='Confidence Interval')
 
-    # Define the period for the last 6 months
-    six_months_ago = end_date - timedelta(days=6*30)  # Approx. 6 months
-    six_months_ago_pd = pd.Timestamp(six_months_ago)
+        # Formatting the plot
+        ax2.set_title(f"{AVAILABLE_TICKERS[ticker_input]} ({ticker_input}) - Last 6 Months: Actual vs. Forecasted Prices")
+        ax2.set_xlabel("Date")
+        ax2.set_ylabel("Price (USD)")
+        ax2.legend()
+        ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        plt.xticks(rotation=45)
+        plt.tight_layout()
 
-    mask = (forecast['ds'] >= six_months_ago_pd) & (forecast['ds'] <= end_date + timedelta(days=90))
-    plot_forecast = forecast.loc[mask]
+        # Pass the figure to st.pyplot
+        st.pyplot(fig2)
 
-    fig2, ax2 = plt.subplots(figsize=(14, 7))
-    ax2.plot(df_prophet['ds'], df_prophet['y'], label='Historical Price', color='blue')
-    ax2.plot(plot_forecast['ds'], plot_forecast['yhat'], label='Forecasted Price', color='red')
-    ax2.fill_between(plot_forecast['ds'], plot_forecast['yhat_lower'], plot_forecast['yhat_upper'], 
-                    color='pink', alpha=0.3, label='Confidence Interval')
-    ax2.set_title(f"{selected_ticker} - Last 6 Months: Actual vs. Forecasted Prices")
-    ax2.set_xlabel("Date")
-    ax2.set_ylabel("Price (USD)")
-    ax2.legend()
-    ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-
-    # Pass the figure to st.pyplot
-    st.pyplot(fig2)
-
-if __name__ == "__main__":
-    main()
+    if __name__ == "__main__":
+        main()
