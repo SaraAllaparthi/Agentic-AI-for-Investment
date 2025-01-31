@@ -10,8 +10,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 
-st.set_option('deprecation.showPyplotGlobalUse', False)
-
 def main():
     # --- Title & Description ---
     st.title("AI-Driven Stock Price Prediction (MVP)")
