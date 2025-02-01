@@ -122,7 +122,7 @@ def get_market_insight(data):
 
 # --- Streamlit App ---
 
-st.title("Agentic AI to Stock Price Prediction")
+st.title("Agentic AI for Stock Price Prediction")
 st.write("Enter a ticker symbol (as per Yahoo Finance) to see predictions for the next 1 day, 1 week, 1 month, and 6 months.")
 
 # Text input for the ticker symbol (default is "GOOGL")
