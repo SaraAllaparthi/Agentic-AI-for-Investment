@@ -92,6 +92,7 @@ def recursive_forecast(model, last_sequence, n_steps, scaler):
     for _ in range(n_steps):
         pred = model.predict(current_seq.reshape(1, current_seq.shape[0], 1), verbose=0)
         predictions.append(pred[0, 0])
+        # Append the prediction and remove the oldest value
         current_seq = np.append(current_seq[1:], [[pred[0, 0]]], axis=0)
     predictions = np.array(predictions).reshape(-1, 1)
     predictions = scaler.inverse_transform(predictions)
@@ -100,10 +101,11 @@ def recursive_forecast(model, last_sequence, n_steps, scaler):
 def get_market_insight(data):
     """
     Provide a simple market insight based on the 50-day moving average.
-    Computes the moving average, drops NaN values, and compares the latest values.
+    Computes the moving average, drops NaN values, and then extracts the last value as a float.
     """
     if len(data) < 50:
         return "Insufficient data to compute market insight."
+    # Compute the 50-day moving average and drop NaN values
     ma50 = data['Close'].rolling(window=50).mean().dropna()
     if ma50.empty:
         return "Insufficient data to compute market insight."
@@ -122,10 +124,10 @@ def get_market_insight(data):
 
 # --- Streamlit App ---
 
-st.title("Agentic AI for Stock Price Prediction")
+st.title("Agentic AI to Stock Price Prediction")
 st.write("Enter a ticker symbol (as per Yahoo Finance) to see predictions for the next 1 day, 1 week, 1 month, and 6 months.")
 
-# Text input for the ticker symbol (default is "GOOGL")
+# Text input for ticker symbol (default is "GOOGL")
 ticker = st.text_input("Ticker", value="GOOGL").upper()
 
 if ticker:
@@ -138,7 +140,7 @@ if ticker:
         st.subheader("Historical Stock Price")
         st.line_chart(data.set_index("Date")["Close"])
         
-        # Preprocess the data
+        # Preprocess the data for training
         window_size = 60
         X, y, scaler = preprocess_data(data, window_size)
         
@@ -152,7 +154,7 @@ if ticker:
             st.success("Loaded pre-trained model.")
             scaler = scaler_loaded
         
-        # Get the last available window to seed predictions
+        # Use the last available window as the seed for forecasting
         last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
         
         # Forecast future prices
@@ -167,32 +169,32 @@ if ticker:
         st.write(f"**Next 1 Month:** ${pred_1_month:.2f}")
         st.write(f"**Next 6 Months:** ${pred_6_month:.2f}")
         
-        # Display market insight
+        # Display a simple market insight
         insight = get_market_insight(data)
         st.info(insight)
         
-        # --- Altair Chart: Real Price vs Predicted Price ---
-        # Forecast full 180-day (6-month) horizon
+        # --- Altair Chart: Real vs Predicted Prices ---
+        # Forecast the full 180-day (6-month) horizon for plotting
         future_dates = pd.date_range(
             start=pd.to_datetime(data['Date'].iloc[-1]) + pd.Timedelta(days=1),
             periods=180, freq='B'
         )
         predictions_180 = recursive_forecast(model, last_sequence, n_steps=180, scaler=scaler)
         
-        # Prepare the historical (real) data for the chart
+        # Prepare historical (real) data for charting
         real_df = data[['Date', 'Close']].copy()
         real_df['Type'] = 'Real'
         real_df.rename(columns={'Close': 'Price'}, inplace=True)
         real_df['Date'] = pd.to_datetime(real_df['Date'])
         
-        # Prepare the forecasted (predicted) data for the chart
+        # Prepare forecasted (predicted) data for charting
         pred_df = pd.DataFrame({
             'Date': future_dates,
             'Price': predictions_180
         })
         pred_df['Type'] = 'Predicted'
         
-        # Combine both datasets
+        # Combine both DataFrames
         combined_df = pd.concat([real_df, pred_df], ignore_index=True)
         
         # Create an Altair line chart with different colors for Real and Predicted data
