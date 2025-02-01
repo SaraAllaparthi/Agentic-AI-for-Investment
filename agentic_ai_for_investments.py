@@ -28,7 +28,7 @@ def get_stock_data(ticker):
     return data
 
 def preprocess_data(data, window_size=60):
-    """Scale and create sequences for LSTM."""
+    """Scale and create sequences for the LSTM model."""
     close_prices = data[['Close']].values
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(close_prices)
@@ -82,7 +82,10 @@ def load_model_and_scaler(ticker):
         return None, None
 
 def recursive_forecast(model, last_sequence, n_steps, scaler):
-    """Predict future prices for n_steps recursively."""
+    """
+    Predict future prices for n_steps recursively.
+    Returns a list of predictions (in the original price scale).
+    """
     predictions = []
     current_seq = last_sequence.copy()
     for _ in range(n_steps):
@@ -96,11 +99,17 @@ def recursive_forecast(model, last_sequence, n_steps, scaler):
     return predictions.flatten().tolist()
 
 def get_market_insight(data):
-    """Provide a simple insight based on the 50-day moving average."""
+    """
+    Provide a simple market insight based on the 50-day moving average.
+    This function computes the moving average, drops any NaN values,
+    and then compares the latest available values.
+    """
     if len(data) < 50:
         return "Insufficient data to compute market insight."
-    # Compute the 50-day moving average (without assigning it as a new column)
-    ma50 = data['Close'].rolling(window=50).mean()
+    # Compute the 50-day moving average and drop NaNs
+    ma50 = data['Close'].rolling(window=50).mean().dropna()
+    if ma50.empty:
+        return "Insufficient data to compute market insight."
     try:
         latest_price = float(data['Close'].iloc[-1])
     except Exception:
@@ -122,7 +131,7 @@ def get_market_insight(data):
 st.title("Agentic AI to Stock Price Prediction")
 st.write("Enter a ticker symbol (as per Yahoo Finance) to see predictions for the next 1 day, 1 week, 1 month, and 6 months.")
 
-# This text input allows the user to enter the ticker name.
+# Allow the user to enter a ticker symbol; default is "GOOGL"
 ticker = st.text_input("Ticker", value="GOOGL").upper()
 
 if ticker:
@@ -135,11 +144,11 @@ if ticker:
         st.subheader("Historical Stock Price")
         st.line_chart(data.set_index("Date")["Close"])
         
-        # Preprocess the data
+        # Preprocess the data for training
         window_size = 60
         X, y, scaler = preprocess_data(data, window_size)
         
-        # Load or train the model
+        # Load a pre-trained model if available; otherwise, train a new one
         model, scaler_loaded = load_model_and_scaler(ticker)
         if model is None:
             st.info("Pre-trained model not found. Training model now (this may take a minute)...")
@@ -149,24 +158,47 @@ if ticker:
             st.success("Loaded pre-trained model.")
             scaler = scaler_loaded
         
-        # Get the last sequence to seed the predictions
+        # Use the last available window as the seed for forecasting
         last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
         
-        # Forecast future prices
-        pred_1_day = recursive_forecast(model, last_sequence, n_steps=1, scaler=scaler)[-1]
-        pred_1_week = recursive_forecast(model, last_sequence, n_steps=7, scaler=scaler)[-1]
+        # Get predictions for different horizons (we extract the last value from each forecast)
+        pred_1_day   = recursive_forecast(model, last_sequence, n_steps=1, scaler=scaler)[-1]
+        pred_1_week  = recursive_forecast(model, last_sequence, n_steps=7, scaler=scaler)[-1]
         pred_1_month = recursive_forecast(model, last_sequence, n_steps=30, scaler=scaler)[-1]
-        pred_6_months = recursive_forecast(model, last_sequence, n_steps=180, scaler=scaler)[-1]
+        pred_6_month = recursive_forecast(model, last_sequence, n_steps=180, scaler=scaler)[-1]
         
         st.subheader("Predicted Prices")
         st.write(f"**Next 1 Day:** ${pred_1_day:.2f}")
         st.write(f"**Next 1 Week:** ${pred_1_week:.2f}")
         st.write(f"**Next 1 Month:** ${pred_1_month:.2f}")
-        st.write(f"**Next 6 Months:** ${pred_6_months:.2f}")
+        st.write(f"**Next 6 Months:** ${pred_6_month:.2f}")
         
-        # Display market insight
+        # Display a simple market insight
         insight = get_market_insight(data)
         st.info(insight)
+        
+        # -------------------------------
+        # Create a chart showing real price vs predicted price
+        # Forecast the full 180-day (6-month) horizon
+        future_dates = pd.date_range(
+            start=pd.to_datetime(data['Date'].iloc[-1]) + pd.Timedelta(days=1),
+            periods=180, freq='B'
+        )
+        predictions_180 = recursive_forecast(model, last_sequence, n_steps=180, scaler=scaler)
+        pred_series = pd.Series(predictions_180, index=future_dates)
+        
+        # Create a DataFrame that holds:
+        # - "Real": historical close prices (indexed by date)
+        # - "Predicted": forecasted prices (indexed by future dates)
+        real_series = data.set_index("Date")["Close"]
+        combined_df = pd.DataFrame({
+            "Real": real_series,
+            "Predicted": pred_series
+        })
+        
+        st.subheader("Real Price vs Predicted Price")
+        st.line_chart(combined_df)
+        # -------------------------------
         
         st.markdown("""
         **Disclaimer:** The predictions provided by Agentic AI are for informational purposes only and should not be considered financial advice. Investing in stocks carries risk, and you should do your own research before making any investment decisions.
