@@ -6,6 +6,7 @@ import os
 import datetime
 import joblib
 import altair as alt
+import math  # Import math for math.isnan
 
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
@@ -101,22 +102,26 @@ def recursive_forecast(model, last_sequence, n_steps, scaler):
 def get_market_insight(data):
     """
     Provide a simple market insight based on the 50-day moving average.
-    Computes the moving average, drops NaN values, and then extracts the last value as a float.
+    Computes the moving average, drops NaN values, and extracts the last value as a float.
+    Uses math.isnan() to check for NaN.
     """
     if len(data) < 50:
         return "Insufficient data to compute market insight."
+    
     # Compute the 50-day moving average and drop NaN values
     ma50 = data['Close'].rolling(window=50).mean().dropna()
     if ma50.empty:
         return "Insufficient data to compute market insight."
+    
     try:
         latest_price = float(data['Close'].iloc[-1])
         latest_ma50 = float(ma50.iloc[-1])
-    except Exception:
-        return "Error processing market insight."
+    except Exception as e:
+        return "Error processing market insight: " + str(e)
     
-    if np.isnan(latest_ma50):
+    if math.isnan(latest_ma50):
         return "Insufficient data to compute market insight."
+    
     if latest_price > latest_ma50:
         return "Market Insight: The stock is trending upward relative to its 50-day average."
     else:
