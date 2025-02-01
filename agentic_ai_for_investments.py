@@ -157,7 +157,7 @@ if ticker:
         # Use the last available window as the seed for forecasting
         last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
         
-        # Forecast future prices
+        # Forecast future prices for various horizons
         pred_1_day   = recursive_forecast(model, last_sequence, n_steps=1, scaler=scaler)[-1]
         pred_1_week  = recursive_forecast(model, last_sequence, n_steps=7, scaler=scaler)[-1]
         pred_1_month = recursive_forecast(model, last_sequence, n_steps=30, scaler=scaler)[-1]
@@ -173,7 +173,7 @@ if ticker:
         insight = get_market_insight(data)
         st.info(insight)
         
-        # --- Altair Chart: Real vs Predicted Prices ---
+        # --- Altair Chart: Real vs Predicted Prices using Layering ---
         # Forecast the full 180-day (6-month) horizon for plotting
         future_dates = pd.date_range(
             start=pd.to_datetime(data['Date'].iloc[-1]) + pd.Timedelta(days=1),
@@ -183,9 +183,10 @@ if ticker:
         
         # Prepare historical (real) data for charting
         real_df = data[['Date', 'Close']].copy()
+        real_df['Price'] = real_df['Close']
         real_df['Type'] = 'Real'
-        real_df.rename(columns={'Close': 'Price'}, inplace=True)
         real_df['Date'] = pd.to_datetime(real_df['Date'])
+        real_df = real_df.sort_values("Date")
         
         # Prepare forecasted (predicted) data for charting
         pred_df = pd.DataFrame({
@@ -193,17 +194,24 @@ if ticker:
             'Price': predictions_180
         })
         pred_df['Type'] = 'Predicted'
+        pred_df = pred_df.sort_values("Date")
         
-        # Combine both DataFrames
-        combined_df = pd.concat([real_df, pred_df], ignore_index=True)
+        # Determine the overall x-axis domain (from the earliest real date to the last predicted date)
+        min_date = real_df['Date'].min()
+        max_date = pred_df['Date'].max()
         
-        # Create an Altair line chart with different colors for Real and Predicted data
-        chart = alt.Chart(combined_df).mark_line(point=True).encode(
-            x=alt.X('Date:T', title='Date'),
-            y=alt.Y('Price:Q', title='Price'),
-            color=alt.Color('Type:N', scale=alt.Scale(domain=['Real', 'Predicted'],
-                                                       range=['blue', 'red']))
-        ).properties(
+        # Create two separate Altair charts and layer them
+        line_real = alt.Chart(real_df).mark_line(color='blue', point=True).encode(
+            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=[min_date, max_date])),
+            y=alt.Y('Price:Q', title='Price')
+        )
+        
+        line_pred = alt.Chart(pred_df).mark_line(color='red', point=True).encode(
+            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=[min_date, max_date])),
+            y=alt.Y('Price:Q', title='Price')
+        )
+        
+        chart = alt.layer(line_real, line_pred).properties(
             width=700,
             height=400,
             title="Real Price vs Predicted Price"
