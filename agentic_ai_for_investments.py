@@ -97,13 +97,13 @@ def recursive_forecast(model, last_sequence, n_steps, scaler):
 
 def get_market_insight(data):
     """Provide a simple insight based on the 50-day moving average."""
-    data['MA50'] = data['Close'].rolling(window=50).mean()
-    # Drop rows with NaN values in MA50 (first 49 rows)
-    valid_data = data.dropna(subset=['MA50'])
-    if valid_data.empty:
+    if len(data) < 50:
         return "Insufficient data to compute market insight."
-    latest_price = valid_data['Close'].iloc[-1]
-    latest_ma50 = valid_data['MA50'].iloc[-1]
+    ma50 = data['Close'].rolling(window=50).mean()
+    latest_price = data['Close'].iloc[-1]
+    latest_ma50 = ma50.iloc[-1]
+    if pd.isna(latest_ma50):
+        return "Insufficient data to compute market insight."
     if latest_price > latest_ma50:
         return "Market Insight: The stock is trending upward relative to its 50-day average."
     else:
