@@ -6,11 +6,10 @@ import os
 import datetime
 import joblib
 import altair as alt
-import math  # Import math for math.isnan
 
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Dense, LSTM, Dropout
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 
 # --- Configuration ---
@@ -20,7 +19,7 @@ if not os.path.exists(MODEL_DIR):
 
 # --- Helper Functions ---
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=True)
 def get_stock_data(ticker):
     """Fetch historical data for the last 2 years using yfinance."""
     end_date = datetime.date.today()
@@ -30,52 +29,53 @@ def get_stock_data(ticker):
     return data
 
 def preprocess_data(data, window_size=60):
-    """Scale and create sequences for the LSTM model."""
+    """
+    Scale and create sequences for the LSTM model.
+    Returns:
+      - X: input sequences (shape: [samples, window_size, 1])
+      - y: target values
+      - scaler: fitted MinMaxScaler (for inverse-transform)
+    """
     close_prices = data[['Close']].values
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(close_prices)
     
     X, y = [], []
     for i in range(window_size, len(scaled_data)):
-        X.append(scaled_data[i - window_size:i, 0])
+        X.append(scaled_data[i-window_size:i, 0])
         y.append(scaled_data[i, 0])
     X, y = np.array(X), np.array(y)
-    # Reshape for LSTM: [samples, time steps, features]
     X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     return X, y, scaler
 
-def build_lstm_model(input_shape):
-    """Build and compile the LSTM model."""
+def build_model(input_shape):
+    """Build and compile an LSTM model."""
     model = Sequential()
-    model.add(LSTM(units=50, return_sequences=True, input_shape=input_shape))
+    model.add(LSTM(50, return_sequences=True, input_shape=input_shape))
     model.add(Dropout(0.2))
-    model.add(LSTM(units=50))
+    model.add(LSTM(50))
     model.add(Dropout(0.2))
-    model.add(Dense(units=1))
+    model.add(Dense(1))
     model.compile(optimizer='adam', loss='mean_squared_error')
     return model
 
 def train_and_save_model(ticker, X, y, scaler, epochs=20, batch_size=32):
-    """Train the LSTM model and save it along with the scaler."""
-    model = build_lstm_model((X.shape[1], 1))
+    """Train the LSTM model and save both the model and scaler."""
+    model = build_model((X.shape[1], 1))
     early_stop = EarlyStopping(monitor='loss', patience=3)
     model.fit(X, y, epochs=epochs, batch_size=batch_size, callbacks=[early_stop], verbose=0)
     
-    # Save the model
+    # Save model and scaler
     model_path = os.path.join(MODEL_DIR, f"{ticker}_lstm.h5")
-    model.save(model_path)
-    
-    # Save the scaler using joblib
     scaler_path = os.path.join(MODEL_DIR, f"{ticker}_scaler.pkl")
+    model.save(model_path)
     joblib.dump(scaler, scaler_path)
-    
     return model
 
 def load_model_and_scaler(ticker):
     """Load the pre-trained model and scaler if available."""
     model_path = os.path.join(MODEL_DIR, f"{ticker}_lstm.h5")
     scaler_path = os.path.join(MODEL_DIR, f"{ticker}_scaler.pkl")
-    
     if os.path.exists(model_path) and os.path.exists(scaler_path):
         model = load_model(model_path)
         scaler = joblib.load(scaler_path)
@@ -83,59 +83,22 @@ def load_model_and_scaler(ticker):
     else:
         return None, None
 
-def recursive_forecast(model, last_sequence, n_steps, scaler):
+def predict_next_day(model, last_sequence, scaler):
     """
-    Predict future prices for n_steps recursively.
-    Returns a list of predictions (in the original price scale).
+    Given the model, last sequence (shape: [window_size, 1]),
+    and the scaler, predict the next day closing price.
     """
-    predictions = []
-    current_seq = last_sequence.copy()
-    for _ in range(n_steps):
-        pred = model.predict(current_seq.reshape(1, current_seq.shape[0], 1), verbose=0)
-        predictions.append(pred[0, 0])
-        # Append the prediction and remove the oldest value
-        current_seq = np.append(current_seq[1:], [[pred[0, 0]]], axis=0)
-    predictions = np.array(predictions).reshape(-1, 1)
-    predictions = scaler.inverse_transform(predictions)
-    return predictions.flatten().tolist()
-
-import math  # Ensure this is imported at the top of your file
-
-def get_market_insight(data):
-    """
-    Provide a simple market insight based on the 50-day moving average.
-    Computes the moving average, drops NaN values, and extracts the last value as a float.
-    Uses math.isnan() to check for NaN.
-    """
-    if len(data) < 50:
-        return "Insufficient data to compute market insight."
-    
-    # Compute the 50-day moving average and drop NaN values
-    ma50 = data['Close'].rolling(window=50).mean().dropna()
-    if ma50.empty:
-        return "Insufficient data to compute market insight."
-    
-    try:
-        latest_price = float(data['Close'].iloc[-1])
-        latest_ma50 = float(ma50.iloc[-1])
-    except Exception as e:
-        return f"Error processing market insight: {e}"
-    
-    # Use math.isnan instead of pd.isna
-    if math.isnan(latest_ma50):
-        return "Insufficient data to compute market insight."
-    
-    if latest_price > latest_ma50:
-        return "Market Insight: The stock is trending upward relative to its 50-day average."
-    else:
-        return "Market Insight: The stock is trending downward relative to its 50-day average."
+    input_seq = np.reshape(last_sequence, (1, last_sequence.shape[0], 1))
+    pred_scaled = model.predict(input_seq, verbose=0)
+    pred = scaler.inverse_transform(pred_scaled)
+    return pred[0, 0]
 
 # --- Streamlit App ---
 
-st.title("Agentic AI to Stock Price Prediction")
-st.write("Enter a ticker symbol (as per Yahoo Finance) to see predictions for the next 1 day, 1 week, 1 month, and 6 months.")
+st.title("Agentic AI: Next Day Closing Price Prediction")
+st.write("Enter a ticker symbol (as per Yahoo Finance) to predict the next day closing price.")
 
-# Text input for ticker symbol (default is "GOOGL")
+# Input for ticker symbol (default is "GOOGL")
 ticker = st.text_input("Ticker", value="GOOGL").upper()
 
 if ticker:
@@ -145,90 +108,61 @@ if ticker:
     if data.empty:
         st.error("No data found for this ticker. Please check the symbol and try again.")
     else:
-        st.subheader("Historical Stock Price")
+        # Display historical closing prices as a line chart
+        st.subheader("Historical Closing Prices")
         st.line_chart(data.set_index("Date")["Close"])
         
-        # Preprocess the data for training
+        # Preprocess data using the last 2 years (window_size = 60)
         window_size = 60
         X, y, scaler = preprocess_data(data, window_size)
         
         # Load or train the model
         model, scaler_loaded = load_model_and_scaler(ticker)
         if model is None:
-            st.info("Pre-trained model not found. Training model now (this may take a minute)...")
+            st.info("No pre-trained model found for this ticker. Training model now...")
             model = train_and_save_model(ticker, X, y, scaler)
-            st.success("Model trained and saved!")
+            st.success("Model trained and saved.")
         else:
             st.success("Loaded pre-trained model.")
-            scaler = scaler_loaded
+            scaler = scaler_loaded  # Use loaded scaler
         
-        # Use the last available window as the seed for forecasting
+        # Use the last available window from the historical data as input
         last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
+        predicted_price = predict_next_day(model, last_sequence, scaler)
         
-        # Forecast future prices for various horizons
-        pred_1_day   = recursive_forecast(model, last_sequence, n_steps=1, scaler=scaler)[-1]
-        pred_1_week  = recursive_forecast(model, last_sequence, n_steps=7, scaler=scaler)[-1]
-        pred_1_month = recursive_forecast(model, last_sequence, n_steps=30, scaler=scaler)[-1]
-        pred_6_month = recursive_forecast(model, last_sequence, n_steps=180, scaler=scaler)[-1]
+        # Display the predicted price numerically
+        st.subheader("Predicted Next Day Closing Price")
+        st.write(f"**${predicted_price:.2f}**")
         
-        st.subheader("Predicted Prices")
-        st.write(f"**Next 1 Day:** ${pred_1_day:.2f}")
-        st.write(f"**Next 1 Week:** ${pred_1_week:.2f}")
-        st.write(f"**Next 1 Month:** ${pred_1_month:.2f}")
-        st.write(f"**Next 6 Months:** ${pred_6_month:.2f}")
-        
-        # Display a simple market insight
-        insight = get_market_insight(data)
-        st.info(insight)
-        
-        # --- Altair Chart: Real vs Predicted Prices using Layering ---
-        # Forecast the full 180-day (6-month) horizon for plotting
-        future_dates = pd.date_range(
-            start=pd.to_datetime(data['Date'].iloc[-1]) + pd.Timedelta(days=1),
-            periods=180, freq='B'
-        )
-        predictions_180 = recursive_forecast(model, last_sequence, n_steps=180, scaler=scaler)
-        
-        # Prepare historical (real) data for charting
-        real_df = data[['Date', 'Close']].copy()
-        real_df['Price'] = real_df['Close']
-        real_df['Type'] = 'Real'
-        real_df['Date'] = pd.to_datetime(real_df['Date'])
-        real_df = real_df.sort_values("Date")
-        
-        # Prepare forecasted (predicted) data for charting
-        pred_df = pd.DataFrame({
+        # --- Plotting: Historical Data vs Prediction Trend ---
+        # Create a flat (red) prediction trend line for a few future business days.
+        last_date = pd.to_datetime(data['Date'].iloc[-1])
+        future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=5, freq='B')
+        pred_line = pd.DataFrame({
             'Date': future_dates,
-            'Price': predictions_180
+            'Price': [predicted_price] * len(future_dates),
+            'Type': ['Prediction'] * len(future_dates)
         })
-        pred_df['Type'] = 'Predicted'
-        pred_df = pred_df.sort_values("Date")
         
-        # Determine the overall x-axis domain (from the earliest real date to the last predicted date)
-        min_date = real_df['Date'].min()
-        max_date = pred_df['Date'].max()
+        # Historical data for plotting
+        hist_df = data[['Date', 'Close']].copy()
+        hist_df.rename(columns={'Close': 'Price'}, inplace=True)
+        hist_df['Date'] = pd.to_datetime(hist_df['Date'])
+        hist_df['Type'] = 'Historical'
         
-        # Create two separate Altair charts and layer them
-        line_real = alt.Chart(real_df).mark_line(color='blue', point=True).encode(
-            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=[min_date, max_date])),
-            y=alt.Y('Price:Q', title='Price')
-        )
+        # Combine the dataframes
+        combined_df = pd.concat([hist_df, pred_line], ignore_index=True)
         
-        line_pred = alt.Chart(pred_df).mark_line(color='red', point=True).encode(
-            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=[min_date, max_date])),
-            y=alt.Y('Price:Q', title='Price')
-        )
-        
-        chart = alt.layer(line_real, line_pred).properties(
+        # Create an Altair chart with two lines (blue for historical, red for prediction)
+        chart = alt.Chart(combined_df).mark_line(point=True).encode(
+            x=alt.X('Date:T', title='Date'),
+            y=alt.Y('Price:Q', title='Price'),
+            color=alt.Color('Type:N', scale=alt.Scale(domain=['Historical', 'Prediction'], range=['blue', 'red']))
+        ).properties(
             width=700,
             height=400,
-            title="Real Price vs Predicted Price"
+            title="Historical Prices (Blue) vs Prediction Trend (Red)"
         )
         
-        st.subheader("Real Price vs Predicted Price")
         st.altair_chart(chart, use_container_width=True)
-        # --- End Altair Chart ---
-        
-        st.markdown("""
-        **Disclaimer:** The predictions provided by Agentic AI are for informational purposes only and should not be considered financial advice. Investing in stocks carries risk, and you should do your own research before making any investment decisions.
-        """)
+        # --- End Plotting ---
