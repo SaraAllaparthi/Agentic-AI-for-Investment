@@ -99,6 +99,8 @@ def recursive_forecast(model, last_sequence, n_steps, scaler):
     predictions = scaler.inverse_transform(predictions)
     return predictions.flatten().tolist()
 
+import math  # Ensure this is imported at the top of your file
+
 def get_market_insight(data):
     """
     Provide a simple market insight based on the 50-day moving average.
@@ -117,8 +119,9 @@ def get_market_insight(data):
         latest_price = float(data['Close'].iloc[-1])
         latest_ma50 = float(ma50.iloc[-1])
     except Exception as e:
-        return "Error processing market insight: " + str(e)
+        return f"Error processing market insight: {e}"
     
+    # Use math.isnan instead of pd.isna
     if math.isnan(latest_ma50):
         return "Insufficient data to compute market insight."
     
