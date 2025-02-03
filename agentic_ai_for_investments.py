@@ -33,6 +33,13 @@ def fetch_data(ticker):
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = [col[-1] for col in data.columns.values]
     
+    # Reset index so that the datetime is a column rather than a timezone-aware index.
+    data = data.reset_index()
+    
+    # Remove timezone information from the date column, if any.
+    if pd.api.types.is_datetime64tz_dtype(data['Date']):
+        data['Date'] = data['Date'].dt.tz_localize(None)
+    
     return data
 
 data_load_state = st.text("Fetching data...")
@@ -43,17 +50,19 @@ if data.empty:
     st.warning("No data returned for this ticker. Data might be missing from Yahoo Finance.")
 else:
     st.subheader(f"Historical Data for {ticker}")
+    # Display the last few rows of data.
     st.write(data.tail())
 
-    # Prepare data for Prophet by resetting index and selecting only the needed columns.
-    df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
+    # Prepare data for Prophet
+    df = data[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
     
-    # Ensure the 'ds' column is datetime and 'y' is numeric.
+    # Ensure the 'ds' column is in datetime format and remove timezone if present.
     df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
-    # Convert the 'y' column to numeric. Now that the columns are flattened, df['y'] should be a 1D Series.
-    df['y'] = pd.to_numeric(df['y'], errors='coerce')
+    if pd.api.types.is_datetime64tz_dtype(df['ds']):
+        df['ds'] = df['ds'].dt.tz_localize(None)
     
-    # Drop rows with missing values in either 'ds' or 'y'.
+    # Convert 'y' to numeric and drop rows with missing values.
+    df['y'] = pd.to_numeric(df['y'], errors='coerce')
     df.dropna(subset=['ds', 'y'], inplace=True)
     df.reset_index(drop=True, inplace=True)
     
