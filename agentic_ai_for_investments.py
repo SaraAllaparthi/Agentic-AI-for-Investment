@@ -1,7 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go  # Updated import statement
+import plotly.graph_objects as go
 from prophet import Prophet
 from prophet.plot import plot_plotly
 from datetime import datetime, timedelta
@@ -40,19 +40,34 @@ else:
     st.write(data.tail())
 
     # Prepare data for Prophet
+    # Reset index and select only the Date and Close columns.
     df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
     
+    # Ensure that the 'ds' column is in datetime format and 'y' is numeric.
+    df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
+    df['y'] = pd.to_numeric(df['y'], errors='coerce')
+    
+    # Drop any rows where ds or y is missing.
+    df.dropna(subset=['ds', 'y'], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    st.write("Data used for training (first few rows):")
+    st.write(df.head())
+    
+    # Train the Prophet model
     st.write("Training the forecasting model...")
-    model = Prophet()
     try:
+        model = Prophet()
         model.fit(df)
     except Exception as e:
         st.error(f"Model training failed: {e}")
         st.stop()
-
-    future = model.make_future_dataframe(periods=6*30)  # approx 6 months
+    
+    # Create a DataFrame for future predictions (approx. 6 months = 180 days)
+    future = model.make_future_dataframe(periods=180)
     forecast = model.predict(future)
-
+    
+    # Plot the forecast using Prophet's built-in Plotly integration.
     st.subheader("Forecasted Stock Prices (Next 6 Months)")
     forecast_fig = plot_plotly(model, forecast)
     forecast_fig.update_layout(
@@ -61,11 +76,12 @@ else:
         legend_title="Legend"
     )
     st.plotly_chart(forecast_fig, use_container_width=True)
-
+    
+    # Create an interactive comparison chart between historical and predicted prices.
     st.subheader("Comparison: Actual vs Predicted Prices")
     last_actual_date = df["ds"].max()
     forecast_future = forecast[forecast["ds"] > last_actual_date]
-
+    
     trace_actual = go.Scatter(
         x=df["ds"],
         y=df["y"],
@@ -80,22 +96,22 @@ else:
         name="Predicted Price",
         line=dict(color="red")
     )
-
+    
     layout = go.Layout(
         title=f"Actual vs Predicted Prices for {ticker}",
         xaxis=dict(title="Date"),
         yaxis=dict(title="Price"),
         hovermode="x unified"
     )
-
+    
     fig = go.Figure(data=[trace_actual, trace_predicted], layout=layout)
     st.plotly_chart(fig, use_container_width=True)
-
+    
     st.markdown(
         """
         **Model Explanation:**
-        - The model used is [Prophet](https://facebook.github.io/prophet/), which is a procedure for forecasting time series data based on an additive model.
-        - The forecast includes a prediction for the next 6 months of stock prices, where the blue line represents historical actual prices and the red line represents the forecasted prices.
+        - The model used is [Prophet](https://facebook.github.io/prophet/), which is a forecasting tool that uses an additive model.
+        - The forecast includes a prediction for the next 6 months of stock prices, with the blue line representing historical actual prices and the red line representing the forecasted prices.
         - Note that this model uses only the raw closing price data and is retrained weekly.
         """
     )
