@@ -50,7 +50,7 @@ def preprocess_data(data, window_size=60):
     
     X, y = [], []
     for i in range(window_size, len(scaled_data)):
-        X.append(scaled_data[i - window_size:i, 0])
+        X.append(scaled_data[i-window_size:i, 0])
         y.append(scaled_data[i, 0])
     X, y = np.array(X), np.array(y)
     X = np.reshape(X, (X.shape[0], window_size, 1))
@@ -94,7 +94,7 @@ def predict_next_day(model, last_sequence, scaler):
     Given the model, the last sequence (of shape [window_size, 1]), and the scaler,
     predict the next day's closing price (in original scale).
     """
-    input_seq = np.reshape(last_sequence, (1, last_sequence.shape[0], 1))
+    input_seq = last_sequence.reshape(1, last_sequence.shape[0], 1)
     pred_scaled = model.predict(input_seq, verbose=0)
     pred = scaler.inverse_transform(pred_scaled)
     return pred[0, 0]
@@ -116,7 +116,7 @@ if ticker:
     if data.empty:
         st.error("No data found for this ticker. Please check the symbol and try again.")
     else:
-        # Preprocess the data (using 2 years of data, 60-day window)
+        # Preprocess data using the last 2 years and a 60-day window
         window_size = 60
         X, y, scaler = preprocess_data(data, window_size)
         
@@ -130,7 +130,7 @@ if ticker:
             st.sidebar.success("Loaded pre-trained model!")
             scaler = loaded_scaler
         
-        # Use the last available 60-day window from historical data for prediction
+        # Use the last available 60-day window for prediction
         last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
         predicted_price = predict_next_day(model, last_sequence, scaler)
         
@@ -140,8 +140,10 @@ if ticker:
         # ---------------------------
         # Prepare data for charting
         
-        # Historical DataFrame for plotting
-        hist_df = data[['Date', 'Close']].copy()
+        # Filter historical data to the last 6 months
+        last_date_all = pd.to_datetime(data['Date']).max()
+        six_months_ago = last_date_all - pd.DateOffset(months=6)
+        hist_df = data[pd.to_datetime(data['Date']) >= six_months_ago][['Date', 'Close']].copy()
         hist_df.rename(columns={'Close': 'Price'}, inplace=True)
         hist_df['Date'] = pd.to_datetime(hist_df['Date'])
         hist_df['Type'] = "Historical"
@@ -155,11 +157,13 @@ if ticker:
             'Type': "Prediction"
         })
         
-        # Combine the historical and prediction data
+        # Combine the historical (last 6 months) and prediction data
         combined_df = pd.concat([hist_df, pred_df], ignore_index=True)
         
         # ---------------------------
-        # Create an Altair Chart with two lines
+        # Create an Altair Chart with two lines:
+        # - Blue line: historical closing prices (last 6 months)
+        # - Red line: prediction trend for the next week
         chart = alt.Chart(combined_df).mark_line(point=True).encode(
             x=alt.X('Date:T', title='Date'),
             y=alt.Y('Price:Q', title='Price'),
@@ -168,7 +172,7 @@ if ticker:
         ).properties(
             width=700,
             height=400,
-            title="Historical Prices vs. Prediction Trend"
+            title="Last 6 Months of Prices (Blue) vs. Prediction Trend (Red)"
         )
         
         st.altair_chart(chart, use_container_width=True)
