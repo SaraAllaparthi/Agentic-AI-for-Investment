@@ -99,25 +99,6 @@ def predict_next_day(model, last_sequence, scaler):
     pred = scaler.inverse_transform(pred_scaled)
     return pred[0, 0]
 
-def recursive_forecast(model, last_sequence, n_steps, scaler):
-    """
-    Given the model, the last sequence (a numpy array of shape [window_size, 1]),
-    predict the next n_steps closing prices recursively.
-    Returns a list of predictions.
-    """
-    predictions = []
-    current_seq = last_sequence.copy()  # shape: (window_size, 1)
-    for _ in range(n_steps):
-        # Reshape to (1, window_size, 1) for prediction
-        input_seq = current_seq.reshape(1, current_seq.shape[0], 1)
-        pred_scaled = model.predict(input_seq, verbose=0)
-        pred = scaler.inverse_transform(pred_scaled)[0, 0]
-        predictions.append(pred)
-        # Append the scaled prediction to the sequence and remove the first element
-        new_val_scaled = pred_scaled[0, 0]
-        current_seq = np.append(current_seq[1:], [[new_val_scaled]], axis=0)
-    return predictions
-
 # ---------------------------
 # Dashboard Layout
 
@@ -168,29 +149,23 @@ if ticker:
         hist_df = hist_df[['Date', 'Close']].copy()
         hist_df.rename(columns={'Close': 'Price'}, inplace=True)
         
-        # Generate Prediction Trend: Use recursive forecasting for the next 5 business days
-        # (This provides a dynamic trend line rather than a flat line.)
-        n_forecast = 5
-        future_preds = recursive_forecast(model, last_sequence, n_steps=n_forecast, scaler=scaler)
+        # Prediction Trend DataFrame: a flat red line for the next 5 business days
         last_hist_date = hist_df['Date'].max()
-        future_dates = pd.date_range(start=last_hist_date + pd.Timedelta(days=1), periods=n_forecast, freq='B')
+        future_dates = pd.date_range(start=last_hist_date + pd.Timedelta(days=1), periods=5, freq='B')
         pred_df = pd.DataFrame({
             'Date': future_dates,
-            'Price': future_preds
+            'Price': [predicted_price] * len(future_dates)
         })
         
-        # Determine overall x-axis domain from the earliest historical date to the last prediction date
-        overall_domain = [hist_df['Date'].min(), pred_df['Date'].max()]
-        
-        # Create Altair chart for historical data (blue line)
+        # Create an Altair chart for the historical data (blue line)
         chart_hist = alt.Chart(hist_df).mark_line(color='blue', point=True).encode(
-            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
+            x=alt.X('Date:T', title='Date'),
             y=alt.Y('Price:Q', title='Price')
         )
         
-        # Create Altair chart for predicted data (red line)
+        # Create an Altair chart for the prediction trend (red line)
         chart_pred = alt.Chart(pred_df).mark_line(color='red', point=True).encode(
-            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
+            x=alt.X('Date:T', title='Date'),
             y=alt.Y('Price:Q', title='Price')
         )
         
@@ -198,7 +173,7 @@ if ticker:
         chart = alt.layer(chart_hist, chart_pred).properties(
             width=700,
             height=400,
-            title="Last 6 Months Historical Prices (Blue) vs. Next Week Prediction Trend (Red)"
+            title="Last 6 Months Historical Prices (Blue) vs. Next Week Prediction (Red)"
         )
         
         st.altair_chart(chart, use_container_width=True)
