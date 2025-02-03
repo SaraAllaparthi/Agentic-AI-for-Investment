@@ -13,7 +13,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 
 # ---------------------------
-# Page configuration
+# Page Configuration
 st.set_page_config(page_title="Agentic AI Stock Trend Dashboard", layout="wide")
 
 # ---------------------------
@@ -116,96 +116,92 @@ def recursive_forecast(model, last_sequence, n_steps, scaler):
 # ---------------------------
 # Dashboard Layout
 
-# Sidebar: Allow the user to enter up to 3 share tickers (comma-separated)
-tickers_input = st.sidebar.text_input("Enter up to 3 share tickers (comma-separated)", 
-                                        value="GOOGL, AAPL, MSFT")
-tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()][:3]
+# Sidebar: Input a single stock ticker
+st.sidebar.title("Agentic AI Inputs")
+ticker = st.sidebar.text_input("Enter Stock Ticker", value="GOOGL").upper()
 
 st.title("Agentic AI: Stock Trend Dashboard")
-st.write("Select up to three shares to view their historical trend for the last 2 years and the ML forecast for the next 6 months.")
+st.write("View the historical trend for the last 2 years and the forecast for the next 6 months for the selected stock.")
 
-# Process each ticker
-for ticker in tickers:
-    st.subheader(f"Stock: {ticker}")
-    
-    # Download historical data (last 2 years)
+if ticker:
+    st.write(f"Fetching data for **{ticker}**...")
     data = get_stock_data(ticker)
     if data.empty:
-        st.error(f"No data found for {ticker}.")
-        continue
-    
-    # Preprocess the data (using a 60-day window)
-    window_size = 60
-    X, y, scaler = preprocess_data(data, window_size)
-    
-    # Load or train the model for this ticker
-    model, loaded_scaler = load_model_and_scaler(ticker)
-    if model is None:
-        st.info(f"No pre-trained model for {ticker}. Training model now...")
-        model = train_and_save_model(ticker, X, y, scaler)
-        st.success(f"Model for {ticker} trained and saved!")
+        st.error("No data found for the ticker. Please check the symbol.")
     else:
-        st.success(f"Loaded pre-trained model for {ticker}.")
-        scaler = loaded_scaler
-    
-    # Use the last available 60-day window for prediction
-    last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
-    
-    # Forecast next 6 months (approx. 126 business days) using recursive forecasting
-    n_forecast = 126
-    future_preds = recursive_forecast(model, last_sequence, n_steps=n_forecast, scaler=scaler)
-    
-    # Historical DataFrame: full 2 years of data
-    hist_df = data.copy()
-    hist_df['Date'] = pd.to_datetime(hist_df['Date'])
-    hist_df = hist_df[['Date', 'Close']].copy()
-    hist_df.rename(columns={'Close': 'Price'}, inplace=True)
-    
-    # Forecast DataFrame for the next 6 months
-    last_hist_date = hist_df['Date'].max()
-    future_dates = pd.date_range(start=last_hist_date + pd.Timedelta(days=1), periods=n_forecast, freq='B')
-    pred_df = pd.DataFrame({
-        'Date': future_dates,
-        'Price': future_preds
-    })
-    
-    # Create an Altair chart:
-    # - Historical data is shown as a solid blue line.
-    # - Forecast data is shown as a dashed red line.
-    chart_hist = alt.Chart(hist_df).mark_line(color='blue').encode(
-        x=alt.X('Date:T', title='Date'),
-        y=alt.Y('Price:Q', title='Price')
-    )
-    
-    chart_pred = alt.Chart(pred_df).mark_line(color='red', strokeDash=[5,5]).encode(
-        x=alt.X('Date:T', title='Date'),
-        y=alt.Y('Price:Q', title='Price')
-    )
-    
-    # Add a text annotation in the forecast region.
-    forecast_mid_date = pred_df['Date'].iloc[len(pred_df)//2]
-    forecast_mid_price = pred_df['Price'].mean()
-    forecast_annotation = alt.Chart(pd.DataFrame({
-        'Date': [forecast_mid_date],
-        'Price': [forecast_mid_price]
-    })).mark_text(
-        align='center',
-        baseline='middle',
-        dy=-10,   # Shift the text upward
-        color='red',
-        fontSize=12
-    ).encode(
-        x='Date:T',
-        y='Price:Q',
-        text=alt.value("Forecast")
-    )
-    
-    # Layer the historical line, forecast line, and annotation together.
-    chart = alt.layer(chart_hist, chart_pred, forecast_annotation).properties(
-        width=700,
-        height=400,
-        title=f"{ticker}: Historical (Blue) vs. 6-Month Forecast (Red)"
-    )
-    
-    st.altair_chart(chart, use_container_width=True)
-    st.markdown("---")
+        # Preprocess the data using a 60-day window
+        window_size = 60
+        X, y, scaler = preprocess_data(data, window_size)
+        
+        # Load or train the model
+        model, loaded_scaler = load_model_and_scaler(ticker)
+        if model is None:
+            st.info("No pre-trained model found. Training model now...")
+            model = train_and_save_model(ticker, X, y, scaler)
+            st.success("Model trained and saved!")
+        else:
+            st.success("Loaded pre-trained model!")
+            scaler = loaded_scaler
+        
+        # Use the last available 60-day window for prediction
+        last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
+        next_day_pred = predict_next_day(model, last_sequence, scaler)
+        st.metric("Predicted Next Day Closing Price", f"${next_day_pred:.2f}")
+        
+        # Historical DataFrame for the last 2 years
+        hist_df = data.copy()
+        hist_df['Date'] = pd.to_datetime(hist_df['Date'])
+        hist_df = hist_df[['Date', 'Close']].copy()
+        hist_df.rename(columns={'Close': 'Price'}, inplace=True)
+        
+        # Forecast DataFrame for the next 6 months (approx. 126 business days)
+        n_forecast = 126
+        future_preds = recursive_forecast(model, last_sequence, n_steps=n_forecast, scaler=scaler)
+        last_hist_date = hist_df['Date'].max()
+        future_dates = pd.date_range(start=last_hist_date + pd.Timedelta(days=1), periods=n_forecast, freq='B')
+        pred_df = pd.DataFrame({
+            'Date': future_dates,
+            'Price': future_preds
+        })
+        
+        # Define overall x-axis domain from the earliest historical date to the last predicted date
+        overall_domain = [hist_df['Date'].min(), pred_df['Date'].max()]
+        
+        # Create an Altair chart for historical data (solid blue line)
+        chart_hist = alt.Chart(hist_df).mark_line(color='blue').encode(
+            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
+            y=alt.Y('Price:Q', title='Price')
+        )
+        
+        # Create an Altair chart for forecast data (dashed red line)
+        chart_pred = alt.Chart(pred_df).mark_line(color='red', strokeDash=[5,5]).encode(
+            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
+            y=alt.Y('Price:Q', title='Price')
+        )
+        
+        # Add a text annotation for the forecast region
+        forecast_mid_date = pred_df['Date'].iloc[len(pred_df)//2]
+        forecast_mid_price = pred_df['Price'].mean()
+        forecast_annotation = alt.Chart(pd.DataFrame({
+            'Date': [forecast_mid_date],
+            'Price': [forecast_mid_price]
+        })).mark_text(
+            align='center',
+            baseline='middle',
+            dy=-10,
+            color='red',
+            fontSize=12
+        ).encode(
+            x='Date:T',
+            y='Price:Q',
+            text=alt.value("Forecast")
+        )
+        
+        # Layer the historical, forecast, and annotation charts together
+        chart = alt.layer(chart_hist, chart_pred, forecast_annotation).properties(
+            width=700,
+            height=400,
+            title=f"{ticker}: Historical vs. 6-Month Forecast"
+        )
+        
+        st.altair_chart(chart, use_container_width=True)
