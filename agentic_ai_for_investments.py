@@ -22,11 +22,17 @@ st.write(
 st.sidebar.header("Stock Selection")
 ticker = st.sidebar.text_input("Enter Stock Ticker (e.g., AAPL, MSFT, GOOGL)", value="AAPL")
 
-@st.cache_data(ttl=60)  # Cache data for 60 seconds to prevent hitting rate limits
+@st.cache_data(ttl=60)
 def fetch_data(ticker):
+    """Fetch historical data for the given ticker."""
     end_date = datetime.today()
     start_date = end_date - timedelta(days=5*365)
     data = yf.download(ticker, start=start_date, end=end_date)
+    
+    # Flatten columns if they are a MultiIndex
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = [col[-1] for col in data.columns.values]
+    
     return data
 
 data_load_state = st.text("Fetching data...")
@@ -39,15 +45,15 @@ else:
     st.subheader(f"Historical Data for {ticker}")
     st.write(data.tail())
 
-    # Prepare data for Prophet
-    # Reset index and select only the Date and Close columns.
+    # Prepare data for Prophet by resetting index and selecting only the needed columns.
     df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
     
-    # Ensure that the 'ds' column is in datetime format and 'y' is numeric.
+    # Ensure the 'ds' column is datetime and 'y' is numeric.
     df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
+    # Convert the 'y' column to numeric. Now that the columns are flattened, df['y'] should be a 1D Series.
     df['y'] = pd.to_numeric(df['y'], errors='coerce')
     
-    # Drop any rows where ds or y is missing.
+    # Drop rows with missing values in either 'ds' or 'y'.
     df.dropna(subset=['ds', 'y'], inplace=True)
     df.reset_index(drop=True, inplace=True)
     
@@ -110,8 +116,8 @@ else:
     st.markdown(
         """
         **Model Explanation:**
-        - The model used is [Prophet](https://facebook.github.io/prophet/), which is a forecasting tool that uses an additive model.
+        - The model used is [Prophet](https://facebook.github.io/prophet/), a forecasting tool that uses an additive model.
         - The forecast includes a prediction for the next 6 months of stock prices, with the blue line representing historical actual prices and the red line representing the forecasted prices.
-        - Note that this model uses only the raw closing price data and is retrained weekly.
+        - This model uses only raw closing price data and is retrained weekly.
         """
     )
