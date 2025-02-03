@@ -140,39 +140,40 @@ if ticker:
         # ---------------------------
         # Prepare data for charting
         
-        # Filter historical data to the last 6 months
-        last_date_all = pd.to_datetime(data['Date']).max()
-        six_months_ago = last_date_all - pd.DateOffset(months=6)
-        hist_df = data[pd.to_datetime(data['Date']) >= six_months_ago][['Date', 'Close']].copy()
-        hist_df.rename(columns={'Close': 'Price'}, inplace=True)
+        # Historical DataFrame for the Last 6 Months
+        hist_df = data.copy()
         hist_df['Date'] = pd.to_datetime(hist_df['Date'])
-        hist_df['Type'] = "Historical"
+        last_date_all = hist_df['Date'].max()
+        six_months_ago = last_date_all - pd.DateOffset(months=6)
+        hist_df = hist_df[hist_df['Date'] >= six_months_ago]
+        hist_df = hist_df[['Date', 'Close']].copy()
+        hist_df.rename(columns={'Close': 'Price'}, inplace=True)
         
-        # Create a Prediction Trend DataFrame: a flat line at the predicted price for the next 5 business days
-        last_date = hist_df['Date'].max()
-        future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=5, freq='B')
+        # Prediction Trend DataFrame: a flat red line for the next 5 business days
+        last_hist_date = hist_df['Date'].max()
+        future_dates = pd.date_range(start=last_hist_date + pd.Timedelta(days=1), periods=5, freq='B')
         pred_df = pd.DataFrame({
             'Date': future_dates,
-            'Price': [predicted_price] * len(future_dates),
-            'Type': "Prediction"
+            'Price': [predicted_price] * len(future_dates)
         })
         
-        # Combine the historical (last 6 months) and prediction data
-        combined_df = pd.concat([hist_df, pred_df], ignore_index=True)
-        
-        # ---------------------------
-        # Create an Altair Chart with two lines:
-        # - Blue line: historical closing prices (last 6 months)
-        # - Red line: prediction trend for the next week
-        chart = alt.Chart(combined_df).mark_line(point=True).encode(
+        # Create an Altair chart for the historical data (blue line)
+        chart_hist = alt.Chart(hist_df).mark_line(color='blue', point=True).encode(
             x=alt.X('Date:T', title='Date'),
-            y=alt.Y('Price:Q', title='Price'),
-            color=alt.Color('Type:N', scale=alt.Scale(domain=['Historical', 'Prediction'],
-                                                       range=['blue', 'red']))
-        ).properties(
+            y=alt.Y('Price:Q', title='Price')
+        )
+        
+        # Create an Altair chart for the prediction trend (red line)
+        chart_pred = alt.Chart(pred_df).mark_line(color='red', point=True).encode(
+            x=alt.X('Date:T', title='Date'),
+            y=alt.Y('Price:Q', title='Price')
+        )
+        
+        # Layer the two charts together
+        chart = alt.layer(chart_hist, chart_pred).properties(
             width=700,
             height=400,
-            title="Last 6 Months of Prices (Blue) vs. Prediction Trend (Red)"
+            title="Last 6 Months Historical Prices (Blue) vs. Next Week Prediction (Red)"
         )
         
         st.altair_chart(chart, use_container_width=True)
