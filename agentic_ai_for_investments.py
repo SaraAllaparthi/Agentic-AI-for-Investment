@@ -1,207 +1,113 @@
 import streamlit as st
 import yfinance as yf
-import numpy as np
 import pandas as pd
-import datetime
-import os
-import joblib
-import altair as alt
+import plotly.graph_objs as go
+from prophet import Prophet
+from prophet.plot import plot_plotly
+from datetime import datetime, timedelta
 
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+# Set the page configuration
+st.set_page_config(page_title="Stock Price Predictor", layout="wide")
 
-# ---------------------------
-# Page Configuration
-st.set_page_config(page_title="Agentic AI Stock Trend Dashboard", layout="wide")
+st.title("Stock Price Predictor Dashboard")
+st.write(
+    """
+    This dashboard fetches the last 5 years of historical stock price data from Yahoo Finance,
+    uses a time series forecasting model (Prophet) to predict stock prices for the next 6 months,
+    and displays a comparison of actual vs. predicted stock prices.
+    """
+)
 
-# ---------------------------
-# Directory for saving models and scalers
-MODEL_DIR = "models"
-if not os.path.exists(MODEL_DIR):
-    os.makedirs(MODEL_DIR)
+# Sidebar for user inputs
+st.sidebar.header("Stock Selection")
+ticker = st.sidebar.text_input("Enter Stock Ticker (e.g., AAPL, MSFT, GOOGL)", value="AAPL")
 
-# ---------------------------
-# Helper Functions
-
-@st.cache_data(show_spinner=True)
-def get_stock_data(ticker):
-    """Download historical data for the last 2 years using yfinance."""
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=2 * 365)
+@st.cache_data(ttl=60)  # cache data for 60 seconds to prevent hitting rate limits
+def fetch_data(ticker):
+    # Define the date range: last 5 years
+    end_date = datetime.today()
+    start_date = end_date - timedelta(days=5*365)
     data = yf.download(ticker, start=start_date, end=end_date)
-    data.reset_index(inplace=True)
     return data
 
-def preprocess_data(data, window_size=60):
-    """
-    Scale and create sequences for the LSTM model.
-    Returns:
-      - X: input sequences (shape: [samples, window_size, 1])
-      - y: target values
-      - scaler: fitted MinMaxScaler for inverse-transform
-    """
-    close_prices = data[['Close']].values
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(close_prices)
+# Fetch the historical data
+data_load_state = st.text("Fetching data...")
+data = fetch_data(ticker)
+data_load_state.text("")
+
+if data.empty:
+    st.warning("No data returned for this ticker. Data might be missing from Yahoo Finance.")
+else:
+    st.subheader(f"Historical Data for {ticker}")
+    st.write(data.tail())
+
+    # Prepare the data for Prophet
+    # Prophet requires a dataframe with columns "ds" (datetime) and "y" (value)
+    df = data.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
     
-    X, y = [], []
-    for i in range(window_size, len(scaled_data)):
-        X.append(scaled_data[i-window_size:i, 0])
-        y.append(scaled_data[i, 0])
-    X, y = np.array(X), np.array(y)
-    X = np.reshape(X, (X.shape[0], window_size, 1))
-    return X, y, scaler
+    # Create and train the Prophet model
+    st.write("Training the forecasting model...")
+    model = Prophet()
+    try:
+        model.fit(df)
+    except Exception as e:
+        st.error(f"Model training failed: {e}")
+        st.stop()
 
-def build_model(input_shape):
-    """Build and compile an LSTM model."""
-    model = Sequential()
-    model.add(LSTM(50, return_sequences=True, input_shape=input_shape))
-    model.add(Dropout(0.2))
-    model.add(LSTM(50))
-    model.add(Dropout(0.2))
-    model.add(Dense(1))
-    model.compile(optimizer="adam", loss="mean_squared_error")
-    return model
+    # Create a dataframe to hold predictions for the next 6 months
+    future = model.make_future_dataframe(periods=6*30)  # approx 6 months (6*30 days)
+    forecast = model.predict(future)
 
-def train_and_save_model(ticker, X, y, scaler, epochs=10, batch_size=32):
-    """Train the LSTM model and save both the model and scaler."""
-    model = build_model((X.shape[1], 1))
-    early_stop = EarlyStopping(monitor='loss', patience=3)
-    model.fit(X, y, epochs=epochs, batch_size=batch_size, verbose=0, callbacks=[early_stop])
-    model_path = os.path.join(MODEL_DIR, f"{ticker}_lstm.h5")
-    scaler_path = os.path.join(MODEL_DIR, f"{ticker}_scaler.pkl")
-    model.save(model_path)
-    joblib.dump(scaler, scaler_path)
-    return model
+    # Plot forecast using Prophet's built-in plotly integration
+    st.subheader("Forecasted Stock Prices (Next 6 Months)")
+    forecast_fig = plot_plotly(model, forecast)
+    forecast_fig.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Stock Price",
+        legend_title="Legend"
+    )
+    st.plotly_chart(forecast_fig, use_container_width=True)
 
-def load_model_and_scaler(ticker):
-    """Load the pre-trained model and scaler if available."""
-    model_path = os.path.join(MODEL_DIR, f"{ticker}_lstm.h5")
-    scaler_path = os.path.join(MODEL_DIR, f"{ticker}_scaler.pkl")
-    if os.path.exists(model_path) and os.path.exists(scaler_path):
-        model = load_model(model_path)
-        scaler = joblib.load(scaler_path)
-        return model, scaler
-    else:
-        return None, None
+    # Create an interactive comparison chart between historical and predicted prices
+    st.subheader("Comparison: Actual vs Predicted Prices")
 
-def predict_next_day(model, last_sequence, scaler):
-    """
-    Given the model and the last sequence (shape: [window_size, 1]),
-    predict the next day's closing price (in original scale).
-    """
-    input_seq = last_sequence.reshape(1, last_sequence.shape[0], 1)
-    pred_scaled = model.predict(input_seq, verbose=0)
-    pred = scaler.inverse_transform(pred_scaled)
-    return pred[0, 0]
+    # Prepare data: actual historical data and predicted forecast
+    # We'll only show predictions that are in the future (beyond the last actual date)
+    last_actual_date = df["ds"].max()
+    forecast_future = forecast[forecast["ds"] > last_actual_date]
 
-def recursive_forecast(model, last_sequence, n_steps, scaler):
-    """
-    Predict the next n_steps closing prices recursively.
-    Returns a list of predictions.
-    """
-    predictions = []
-    current_seq = last_sequence.copy()  # shape: (window_size, 1)
-    for _ in range(n_steps):
-        input_seq = current_seq.reshape(1, current_seq.shape[0], 1)
-        pred_scaled = model.predict(input_seq, verbose=0)
-        pred = scaler.inverse_transform(pred_scaled)[0, 0]
-        predictions.append(pred)
-        new_val_scaled = pred_scaled[0, 0]
-        current_seq = np.append(current_seq[1:], [[new_val_scaled]], axis=0)
-    return predictions
+    # Create traces for actual and forecasted data
+    trace_actual = go.Scatter(
+        x=df["ds"],
+        y=df["y"],
+        mode="lines",
+        name="Actual Price",
+        line=dict(color="blue")
+    )
+    trace_predicted = go.Scatter(
+        x=forecast_future["ds"],
+        y=forecast_future["yhat"],
+        mode="lines",
+        name="Predicted Price",
+        line=dict(color="red")
+    )
 
-# ---------------------------
-# Dashboard Layout
+    layout = go.Layout(
+        title=f"Actual vs Predicted Prices for {ticker}",
+        xaxis=dict(title="Date"),
+        yaxis=dict(title="Price"),
+        hovermode="x unified"
+    )
 
-# Sidebar: Input a single stock ticker
-st.sidebar.title("Agentic AI Inputs")
-ticker = st.sidebar.text_input("Enter Stock Ticker", value="GOOGL").upper()
+    fig = go.Figure(data=[trace_actual, trace_predicted], layout=layout)
+    st.plotly_chart(fig, use_container_width=True)
 
-st.title("Agentic AI: Stock Trend Dashboard")
-st.write("View the historical trend for the last 2 years and the forecast for the next 6 months for the selected stock.")
-
-if ticker:
-    st.write(f"Fetching data for **{ticker}**...")
-    data = get_stock_data(ticker)
-    if data.empty:
-        st.error("No data found for the ticker. Please check the symbol.")
-    else:
-        # Preprocess the data using a 60-day window
-        window_size = 60
-        X, y, scaler = preprocess_data(data, window_size)
-        
-        # Load or train the model
-        model, loaded_scaler = load_model_and_scaler(ticker)
-        if model is None:
-            st.info("No pre-trained model found. Training model now...")
-            model = train_and_save_model(ticker, X, y, scaler)
-            st.success("Model trained and saved!")
-        else:
-            st.success("Loaded pre-trained model!")
-            scaler = loaded_scaler
-        
-        # Use the last available 60-day window for prediction
-        last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
-        next_day_pred = predict_next_day(model, last_sequence, scaler)
-        st.metric("Predicted Next Day Closing Price", f"${next_day_pred:.2f}")
-        
-        # Historical DataFrame for the last 2 years
-        hist_df = data.copy()
-        hist_df['Date'] = pd.to_datetime(hist_df['Date'])
-        hist_df = hist_df[['Date', 'Close']].copy()
-        hist_df.rename(columns={'Close': 'Price'}, inplace=True)
-        
-        # Forecast DataFrame for the next 6 months (approx. 126 business days)
-        n_forecast = 126
-        future_preds = recursive_forecast(model, last_sequence, n_steps=n_forecast, scaler=scaler)
-        last_hist_date = hist_df['Date'].max()
-        future_dates = pd.date_range(start=last_hist_date + pd.Timedelta(days=1), periods=n_forecast, freq='B')
-        pred_df = pd.DataFrame({
-            'Date': future_dates,
-            'Price': future_preds
-        })
-        
-        # Define overall x-axis domain from the earliest historical date to the last predicted date
-        overall_domain = [hist_df['Date'].min(), pred_df['Date'].max()]
-        
-        # Create an Altair chart for historical data (solid blue line)
-        chart_hist = alt.Chart(hist_df).mark_line(color='blue').encode(
-            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
-            y=alt.Y('Price:Q', title='Price')
-        )
-        
-        # Create an Altair chart for forecast data (dashed red line)
-        chart_pred = alt.Chart(pred_df).mark_line(color='red', strokeDash=[5,5]).encode(
-            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
-            y=alt.Y('Price:Q', title='Price')
-        )
-        
-        # Add a text annotation for the forecast region
-        forecast_mid_date = pred_df['Date'].iloc[len(pred_df)//2]
-        forecast_mid_price = pred_df['Price'].mean()
-        forecast_annotation = alt.Chart(pd.DataFrame({
-            'Date': [forecast_mid_date],
-            'Price': [forecast_mid_price]
-        })).mark_text(
-            align='center',
-            baseline='middle',
-            dy=-10,
-            color='red',
-            fontSize=12
-        ).encode(
-            x='Date:T',
-            y='Price:Q',
-            text=alt.value("Forecast")
-        )
-        
-        # Layer the historical, forecast, and annotation charts together
-        chart = alt.layer(chart_hist, chart_pred, forecast_annotation).properties(
-            width=700,
-            height=400,
-            title=f"{ticker}: Historical vs. 6-Month Forecast"
-        )
-        
-        st.altair_chart(chart, use_container_width=True)
+    # Display additional explanation
+    st.markdown(
+        """
+        **Model Explanation:**
+        - The model used is [Prophet](https://facebook.github.io/prophet/), which is a procedure for forecasting time series data based on an additive model.
+        - The forecast includes a prediction for the next 6 months of stock prices, where the blue line represents historical actual prices and the red line represents the forecasted prices.
+        - Note that this model uses only the raw closing price data and is retrained weekly.
+        """
+    )
