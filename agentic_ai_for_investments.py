@@ -157,15 +157,18 @@ if ticker:
             'Price': [predicted_price] * len(future_dates)
         })
         
-        # Create an Altair chart for the historical data (blue line)
+        # Determine the overall x-axis domain from the earliest historical date to the last predicted date
+        overall_domain = [hist_df['Date'].min(), pred_df['Date'].max()]
+        
+        # Create an Altair chart for the historical data (blue line) with explicit x-axis domain
         chart_hist = alt.Chart(hist_df).mark_line(color='blue', point=True).encode(
-            x=alt.X('Date:T', title='Date'),
+            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
             y=alt.Y('Price:Q', title='Price')
         )
         
-        # Create an Altair chart for the prediction trend (red line)
+        # Create an Altair chart for the prediction trend (red line) with explicit x-axis domain
         chart_pred = alt.Chart(pred_df).mark_line(color='red', point=True).encode(
-            x=alt.X('Date:T', title='Date'),
+            x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
             y=alt.Y('Price:Q', title='Price')
         )
         
