@@ -1,132 +1,159 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
-from prophet import Prophet
-from prophet.plot import plot_plotly
 from datetime import datetime, timedelta
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import LSTM, Dense
+import os
 
-# Set the page configuration
-st.set_page_config(page_title="Stock Price Predictor", layout="wide")
+# Configure the app
+st.set_page_config(page_title="Trading Strategy with ML Forecasting", layout="wide")
+st.title("Trading Strategy with ML Forecasting")
 
-st.title("Stock Price Predictor Dashboard")
-st.write(
+# Description of what the app does
+st.markdown(
     """
-    This dashboard fetches the last 5 years of historical stock price data from Yahoo Finance,
-    uses a time series forecasting model (Prophet) to predict stock prices for the next 6 months,
-    and displays a comparison of actual vs. predicted stock prices.
+    **What does this app do?**
+
+    This app does two main things:
+    
+    1. **Learns from the Past:**  
+       It downloads historical stock prices (for example, for AAPL) and trains a machine learning model (an LSTM) to learn the patterns in those prices.
+    
+    2. **Predicts the Future:**  
+       After training, the app forecasts future stock prices for a set number of days. It then shows you a graph that compares historical prices (blue line) with predicted future prices (red dashed line).
+    
+    In short, the app helps you see how a stock has behaved in the past and uses that information to forecast its future trend.
     """
 )
 
 # Sidebar for user inputs
-st.sidebar.header("Stock Selection")
-ticker = st.sidebar.text_input("Enter Stock Ticker (e.g., AAPL, MSFT, GOOGL)", value="AAPL")
+st.sidebar.header("Input Parameters")
+ticker = st.sidebar.text_input("Stock Ticker", "AAPL")
+start_date = st.sidebar.date_input("Start Date", datetime.today() - timedelta(days=5*365))
+end_date = st.sidebar.date_input("End Date", datetime.today())
+forecast_days = st.sidebar.number_input("Forecast Days", min_value=1, value=30)
+run_forecast = st.sidebar.button("Run Forecast")
 
-@st.cache_data(ttl=60)
-def fetch_data(ticker):
-    """Fetch historical data for the given ticker."""
-    end_date = datetime.today()
-    start_date = end_date - timedelta(days=5*365)
-    data = yf.download(ticker, start=start_date, end=end_date)
-    
-    # Flatten columns if they are a MultiIndex
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = [col[-1] for col in data.columns.values]
-    
-    # Reset index so that the datetime is a column rather than a timezone-aware index.
-    data = data.reset_index()
-    
-    # Remove timezone information from the date column, if any.
+# Define the path for saving/loading the model
+model_filename = f"lstm_model_{ticker}.h5"
+
+@st.cache_data(ttl=3600)
+def get_data(ticker, start, end):
+    """Fetch historical data for a given ticker and date range."""
+    data = yf.download(ticker, start=start, end=end)
+    data.reset_index(inplace=True)
+    # Remove timezone info if present
     if pd.api.types.is_datetime64tz_dtype(data['Date']):
         data['Date'] = data['Date'].dt.tz_localize(None)
-    
     return data
 
-data_load_state = st.text("Fetching data...")
-data = fetch_data(ticker)
-data_load_state.text("")
+def create_sequences(data, seq_length=60):
+    """Create sequences for LSTM training."""
+    X, y = [], []
+    for i in range(seq_length, len(data)):
+        X.append(data[i - seq_length:i, 0])
+        y.append(data[i, 0])
+    return np.array(X), np.array(y)
 
-if data.empty:
-    st.warning("No data returned for this ticker. Data might be missing from Yahoo Finance.")
-else:
-    st.subheader(f"Historical Data for {ticker}")
-    # Display the last few rows of data.
-    st.write(data.tail())
+if run_forecast:
+    # Fetch the historical data
+    data_load_state = st.text("Fetching historical data...")
+    data = get_data(ticker, start_date, end_date)
+    data_load_state.text("Historical data loaded.")
 
-    # Prepare data for Prophet
-    df = data[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
-    
-    # Ensure the 'ds' column is in datetime format and remove timezone if present.
-    df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
-    if pd.api.types.is_datetime64tz_dtype(df['ds']):
-        df['ds'] = df['ds'].dt.tz_localize(None)
-    
-    # Convert 'y' to numeric and drop rows with missing values.
-    df['y'] = pd.to_numeric(df['y'], errors='coerce')
-    df.dropna(subset=['ds', 'y'], inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    
-    st.write("Data used for training (first few rows):")
-    st.write(df.head())
-    
-    # Train the Prophet model
-    st.write("Training the forecasting model...")
-    try:
-        model = Prophet()
-        model.fit(df)
-    except Exception as e:
-        st.error(f"Model training failed: {e}")
-        st.stop()
-    
-    # Create a DataFrame for future predictions (approx. 6 months = 180 days)
-    future = model.make_future_dataframe(periods=180)
-    forecast = model.predict(future)
-    
-    # Plot the forecast using Prophet's built-in Plotly integration.
-    st.subheader("Forecasted Stock Prices (Next 6 Months)")
-    forecast_fig = plot_plotly(model, forecast)
-    forecast_fig.update_layout(
-        xaxis_title="Date",
-        yaxis_title="Stock Price",
-        legend_title="Legend"
-    )
-    st.plotly_chart(forecast_fig, use_container_width=True)
-    
-    # Create an interactive comparison chart between historical and predicted prices.
-    st.subheader("Comparison: Actual vs Predicted Prices")
-    last_actual_date = df["ds"].max()
-    forecast_future = forecast[forecast["ds"] > last_actual_date]
-    
-    trace_actual = go.Scatter(
-        x=df["ds"],
-        y=df["y"],
-        mode="lines",
-        name="Actual Price",
-        line=dict(color="blue")
-    )
-    trace_predicted = go.Scatter(
-        x=forecast_future["ds"],
-        y=forecast_future["yhat"],
-        mode="lines",
-        name="Predicted Price",
-        line=dict(color="red")
-    )
-    
-    layout = go.Layout(
-        title=f"Actual vs Predicted Prices for {ticker}",
-        xaxis=dict(title="Date"),
-        yaxis=dict(title="Price"),
-        hovermode="x unified"
-    )
-    
-    fig = go.Figure(data=[trace_actual, trace_predicted], layout=layout)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown(
-        """
-        **Model Explanation:**
-        - The model used is [Prophet](https://facebook.github.io/prophet/), a forecasting tool that uses an additive model.
-        - The forecast includes a prediction for the next 6 months of stock prices, with the blue line representing historical actual prices and the red line representing the forecasted prices.
-        - This model uses only raw closing price data and is retrained weekly.
-        """
-    )
+    if data.empty:
+        st.error("No data fetched. Please check the ticker and date range.")
+    else:
+        st.subheader(f"Historical Data for {ticker}")
+        st.write(data.tail())
+
+        # Prepare data for the LSTM model (using the 'Close' prices)
+        df = data[['Date', 'Close']].copy()
+        df.set_index('Date', inplace=True)
+
+        # Normalize the closing price data
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(df)
+
+        seq_length = 60  # Look-back period (days)
+        X, y = create_sequences(scaled_data, seq_length)
+        X = X.reshape((X.shape[0], X.shape[1], 1))
+
+        # Build the LSTM model architecture
+        model = Sequential()
+        model.add(LSTM(50, return_sequences=True, input_shape=(X.shape[1], 1)))
+        model.add(LSTM(50))
+        model.add(Dense(1))
+        model.compile(optimizer='adam', loss='mean_squared_error')
+
+        # Check if a pre-trained model exists
+        if os.path.exists(model_filename):
+            st.write("Loading pre-trained model...")
+            model = load_model(model_filename)
+        else:
+            st.write("Training the LSTM model... (this may take a few minutes)")
+            # Train with fewer epochs for faster response; adjust as needed
+            history = model.fit(X, y, epochs=10, batch_size=32, verbose=0)
+            model.save(model_filename)
+            st.write("Training complete and model saved.")
+            # Optionally display training loss
+            loss_fig = go.Figure()
+            loss_fig.add_trace(go.Scatter(
+                x=list(range(len(history.history['loss']))),
+                y=history.history['loss'],
+                mode='lines',
+                name='Training Loss',
+                line=dict(color='blue', width=2)
+            ))
+            loss_fig.update_layout(
+                title="Training Loss Over Epochs",
+                xaxis_title="Epoch",
+                yaxis_title="Loss",
+                template="plotly_white"
+            )
+            st.plotly_chart(loss_fig, use_container_width=True)
+
+        # Forecast future prices using the trained model
+        last_sequence = scaled_data[-seq_length:]
+        predictions = []
+        current_sequence = last_sequence.copy()
+
+        for _ in range(forecast_days):
+            pred = model.predict(current_sequence.reshape(1, seq_length, 1))[0, 0]
+            predictions.append(pred)
+            # Append the predicted value and slide the window
+            current_sequence = np.append(current_sequence[1:], [[pred]], axis=0)
+
+        # Convert the predictions back to the original scale
+        predicted_prices = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
+        last_date = df.index[-1]
+        forecast_dates = pd.date_range(last_date + timedelta(days=1), periods=forecast_days)
+
+        # Plot historical and forecasted prices
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df['Close'], mode='lines', name='Historical Close Price',
+            line=dict(color='blue', width=2)))
+        fig.add_trace(go.Scatter(
+            x=forecast_dates, y=predicted_prices.flatten(), mode='lines', name='Predicted Price',
+            line=dict(dash='dash', color='red', width=2)))
+        fig.update_layout(
+            title=f"{ticker} Price Forecast",
+            xaxis_title="Date",
+            yaxis_title="Price",
+            template="plotly_white"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown(
+            f"""
+            **Explanation:**
+            - The LSTM model is trained on historical closing prices.
+            - It then predicts the next {forecast_days} days of prices based on learned patterns.
+            - The forecast is shown as a red dashed line compared to the historical prices (blue line).
+            """
+        )
