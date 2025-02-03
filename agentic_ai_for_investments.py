@@ -1,3 +1,5 @@
+# agentic_ai_for_investments.py
+
 import streamlit as st
 import yfinance as yf
 import numpy as np
@@ -66,7 +68,7 @@ def build_model(input_shape):
     return model
 
 def train_and_save_model(ticker, X, y, scaler, epochs=10, batch_size=32):
-    """Train the LSTM model and save the model and scaler."""
+    """Train the LSTM model and save both the model and scaler."""
     model = build_model((X.shape[1], 1))
     early_stop = EarlyStopping(monitor='loss', patience=3)
     model.fit(X, y, epochs=epochs, batch_size=batch_size, verbose=0, callbacks=[early_stop])
@@ -89,8 +91,8 @@ def load_model_and_scaler(ticker):
 
 def predict_next_day(model, last_sequence, scaler):
     """
-    Given the model and last sequence (shape: [window_size, 1]),
-    predict the next day's closing price (in the original scale).
+    Given the model and the last sequence (shape: [window_size, 1]),
+    predict the next day's closing price (in original scale).
     """
     input_seq = last_sequence.reshape(1, last_sequence.shape[0], 1)
     pred_scaled = model.predict(input_seq, verbose=0)
@@ -122,7 +124,7 @@ tickers_input = st.sidebar.text_input("Enter up to 3 share tickers (comma-separa
 tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()][:3]
 
 st.title("Agentic AI: Stock Trend Dashboard")
-st.write("For each selected share, this dashboard shows the trend for the last 2 years and the next 6 months predicted by our LSTM model.")
+st.write("Select up to three shares to view their trends for the last 2 years and a forecast for the next 6 months using our ML model.")
 
 # Process each ticker
 for ticker in tickers:
@@ -151,24 +153,25 @@ for ticker in tickers:
     # Use the last available 60-day window for prediction
     last_sequence = scaler.transform(data[['Close']].values)[-window_size:]
     
-    # Optionally, display the predicted next day closing price as a metric
-    next_day_pred = predict_next_day(model, last_sequence, scaler)
-    st.metric(label="Predicted Next Day Closing Price", value=f"${next_day_pred:.2f}")
+    # Forecast next 6 months (approx. 126 business days) using recursive forecasting
+    n_forecast = 126
+    future_preds = recursive_forecast(model, last_sequence, n_steps=n_forecast, scaler=scaler)
     
-    # Historical Data: use the full 2-year data
+    # Historical DataFrame for the last 2 years
     hist_df = data.copy()
     hist_df['Date'] = pd.to_datetime(hist_df['Date'])
     hist_df = hist_df[['Date', 'Close']].copy()
     hist_df.rename(columns={'Close': 'Price'}, inplace=True)
     
-    # Forecast for the next 6 months (approx. 126 business days)
-    n_forecast = 126
-    future_preds = recursive_forecast(model, last_sequence, n_steps=n_forecast, scaler=scaler)
+    # Forecast DataFrame for the next 6 months
     last_hist_date = hist_df['Date'].max()
     future_dates = pd.date_range(start=last_hist_date + pd.Timedelta(days=1), periods=n_forecast, freq='B')
-    pred_df = pd.DataFrame({'Date': future_dates, 'Price': future_preds})
+    pred_df = pd.DataFrame({
+        'Date': future_dates,
+        'Price': future_preds
+    })
     
-    # Determine overall x-axis domain from the earliest historical date to the last predicted date
+    # Determine overall x-axis domain: from the earliest historical date to the last predicted date
     overall_domain = [hist_df['Date'].min(), pred_df['Date'].max()]
     
     # Create Altair chart for historical data (blue line)
@@ -183,12 +186,29 @@ for ticker in tickers:
         y=alt.Y('Price:Q', title='Price')
     )
     
-    # Layer the charts
-    chart = alt.layer(chart_hist, chart_pred).properties(
+    # Create a vertical dashed rule at the last historical date
+    vertical_rule = alt.Chart(pd.DataFrame({'Date': [last_hist_date]})).mark_rule(
+        color='black', strokeDash=[5, 5]
+    ).encode(
+        x=alt.X('Date:T')
+    )
+    
+    # Layer the charts together
+    chart = alt.layer(chart_hist, chart_pred, vertical_rule).properties(
         width=700,
         height=400,
-        title=f"{ticker}: Last 2 Years Historical vs. Next 6 Months Prediction"
+        title=f"{ticker}: Historical (Blue) vs. 6-Month Forecast (Red)"
     )
     
     st.altair_chart(chart, use_container_width=True)
+    
+    # Explanation for the vertical rule
+    st.markdown(
+        f"""<div style="font-size:14px; margin-bottom:20px;">
+            <b>Note:</b> The vertical dashed line at {last_hist_date.strftime('%Y-%m-%d')} indicates 
+            the transition from historical data to the forecast period.
+            </div>""",
+        unsafe_allow_html=True
+    )
+    
     st.markdown("---")
