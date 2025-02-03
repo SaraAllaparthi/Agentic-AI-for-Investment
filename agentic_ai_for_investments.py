@@ -1,5 +1,3 @@
-# agentic_ai_for_investments.py
-
 import streamlit as st
 import yfinance as yf
 import numpy as np
@@ -124,7 +122,7 @@ tickers_input = st.sidebar.text_input("Enter up to 3 share tickers (comma-separa
 tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()][:3]
 
 st.title("Agentic AI: Stock Trend Dashboard")
-st.write("Select up to three shares to view their trends for the last 2 years and a forecast for the next 6 months using our ML model.")
+st.write("Select up to three shares to view their historical trend for the last 2 years and the ML forecast for the next 6 months.")
 
 # Process each ticker
 for ticker in tickers:
@@ -157,7 +155,7 @@ for ticker in tickers:
     n_forecast = 126
     future_preds = recursive_forecast(model, last_sequence, n_steps=n_forecast, scaler=scaler)
     
-    # Historical DataFrame for the last 2 years
+    # Historical DataFrame: full 2 years of data
     hist_df = data.copy()
     hist_df['Date'] = pd.to_datetime(hist_df['Date'])
     hist_df = hist_df[['Date', 'Close']].copy()
@@ -171,44 +169,43 @@ for ticker in tickers:
         'Price': future_preds
     })
     
-    # Determine overall x-axis domain: from the earliest historical date to the last predicted date
-    overall_domain = [hist_df['Date'].min(), pred_df['Date'].max()]
-    
-    # Create Altair chart for historical data (blue line)
+    # Create an Altair chart:
+    # - Historical data is shown as a solid blue line.
+    # - Forecast data is shown as a dashed red line.
     chart_hist = alt.Chart(hist_df).mark_line(color='blue').encode(
-        x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
+        x=alt.X('Date:T', title='Date'),
         y=alt.Y('Price:Q', title='Price')
     )
     
-    # Create Altair chart for forecast data (red line)
-    chart_pred = alt.Chart(pred_df).mark_line(color='red').encode(
-        x=alt.X('Date:T', title='Date', scale=alt.Scale(domain=overall_domain)),
+    chart_pred = alt.Chart(pred_df).mark_line(color='red', strokeDash=[5,5]).encode(
+        x=alt.X('Date:T', title='Date'),
         y=alt.Y('Price:Q', title='Price')
     )
     
-    # Create a vertical dashed rule at the last historical date
-    vertical_rule = alt.Chart(pd.DataFrame({'Date': [last_hist_date]})).mark_rule(
-        color='black', strokeDash=[5, 5]
+    # Add a text annotation in the forecast region.
+    forecast_mid_date = pred_df['Date'].iloc[len(pred_df)//2]
+    forecast_mid_price = pred_df['Price'].mean()
+    forecast_annotation = alt.Chart(pd.DataFrame({
+        'Date': [forecast_mid_date],
+        'Price': [forecast_mid_price]
+    })).mark_text(
+        align='center',
+        baseline='middle',
+        dy=-10,   # Shift the text upward
+        color='red',
+        fontSize=12
     ).encode(
-        x=alt.X('Date:T')
+        x='Date:T',
+        y='Price:Q',
+        text=alt.value("Forecast")
     )
     
-    # Layer the charts together
-    chart = alt.layer(chart_hist, chart_pred, vertical_rule).properties(
+    # Layer the historical line, forecast line, and annotation together.
+    chart = alt.layer(chart_hist, chart_pred, forecast_annotation).properties(
         width=700,
         height=400,
         title=f"{ticker}: Historical (Blue) vs. 6-Month Forecast (Red)"
     )
     
     st.altair_chart(chart, use_container_width=True)
-    
-    # Explanation for the vertical rule
-    st.markdown(
-        f"""<div style="font-size:14px; margin-bottom:20px;">
-            <b>Note:</b> The vertical dashed line at {last_hist_date.strftime('%Y-%m-%d')} indicates 
-            the transition from historical data to the forecast period.
-            </div>""",
-        unsafe_allow_html=True
-    )
-    
     st.markdown("---")
