@@ -1,159 +1,174 @@
+# streamlit_app.py
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense
-import os
+import datetime
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+from textblob import TextBlob
+import feedparser
 
-# Configure the app
-st.set_page_config(page_title="Trading Strategy with ML Forecasting", layout="wide")
-st.title("Trading Strategy with ML Forecasting")
+# --- Helper functions ---
 
-# Description of what the app does
-st.markdown(
+def fetch_stock_data(ticker, period="5y"):
     """
-    **What does this app do?**
-
-    This app does two main things:
-    
-    1. **Learns from the Past:**  
-       It downloads historical stock prices (for example, for AAPL) and trains a machine learning model (an LSTM) to learn the patterns in those prices.
-    
-    2. **Predicts the Future:**  
-       After training, the app forecasts future stock prices for a set number of days. It then shows you a graph that compares historical prices (blue line) with predicted future prices (red dashed line).
-    
-    In short, the app helps you see how a stock has behaved in the past and uses that information to forecast its future trend.
+    Fetch historical stock data from yfinance.
     """
-)
-
-# Sidebar for user inputs
-st.sidebar.header("Input Parameters")
-ticker = st.sidebar.text_input("Stock Ticker", "AAPL")
-start_date = st.sidebar.date_input("Start Date", datetime.today() - timedelta(days=5*365))
-end_date = st.sidebar.date_input("End Date", datetime.today())
-forecast_days = st.sidebar.number_input("Forecast Days", min_value=1, value=30)
-run_forecast = st.sidebar.button("Run Forecast")
-
-# Define the path for saving/loading the model
-model_filename = f"lstm_model_{ticker}.h5"
-
-@st.cache_data(ttl=3600)
-def get_data(ticker, start, end):
-    """Fetch historical data for a given ticker and date range."""
-    data = yf.download(ticker, start=start, end=end)
-    data.reset_index(inplace=True)
-    # Remove timezone info if present
-    if pd.api.types.is_datetime64tz_dtype(data['Date']):
-        data['Date'] = data['Date'].dt.tz_localize(None)
+    data = yf.download(ticker, period=period)
+    data.dropna(inplace=True)
     return data
 
-def create_sequences(data, seq_length=60):
-    """Create sequences for LSTM training."""
-    X, y = [], []
-    for i in range(seq_length, len(data)):
-        X.append(data[i - seq_length:i, 0])
-        y.append(data[i, 0])
-    return np.array(X), np.array(y)
+def add_technical_indicators(data):
+    """
+    Add a few simple technical indicators: 10-day MA, RSI, and MACD.
+    Assumes 'Close' column exists.
+    """
+    # 10-day Moving Average
+    data['MA10'] = data['Close'].rolling(window=10).mean()
 
-if run_forecast:
-    # Fetch the historical data
-    data_load_state = st.text("Fetching historical data...")
-    data = get_data(ticker, start_date, end_date)
-    data_load_state.text("Historical data loaded.")
+    # RSI Calculation
+    delta = data['Close'].diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    ema_up = up.ewm(com=13, adjust=False).mean()
+    ema_down = down.ewm(com=13, adjust=False).mean()
+    rs = ema_up / ema_down
+    data['RSI'] = 100 - (100 / (1 + rs))
 
-    if data.empty:
-        st.error("No data fetched. Please check the ticker and date range.")
+    # MACD Calculation
+    ema_12 = data['Close'].ewm(span=12, adjust=False).mean()
+    ema_26 = data['Close'].ewm(span=26, adjust=False).mean()
+    data['MACD'] = ema_12 - ema_26
+
+    data.dropna(inplace=True)
+    return data
+
+def fetch_news_sentiment(ticker):
+    """
+    Fetch recent news headlines from a public RSS feed (e.g., Google News)
+    and compute an average sentiment score using TextBlob.
+    """
+    # Use Google News RSS feed for the stock (this is a simple example)
+    # You can modify the query as needed.
+    rss_url = f"https://news.google.com/rss/search?q={ticker}+stock"
+    feed = feedparser.parse(rss_url)
+    sentiments = []
+    for entry in feed.entries:
+        headline = entry.title
+        analysis = TextBlob(headline)
+        sentiments.append(analysis.sentiment.polarity)
+    if sentiments:
+        avg_sentiment = np.mean(sentiments)
     else:
-        st.subheader(f"Historical Data for {ticker}")
-        st.write(data.tail())
+        avg_sentiment = 0.0
+    return avg_sentiment
 
-        # Prepare data for the LSTM model (using the 'Close' prices)
-        df = data[['Date', 'Close']].copy()
-        df.set_index('Date', inplace=True)
+def train_time_index_model(data):
+    """
+    Train a Linear Regression model on a simple time index versus the closing price.
+    This will be used to forecast future prices.
+    """
+    df = data.copy().reset_index()
+    # Create a numeric time index (number of days since the start)
+    df['Days'] = (df['Date'] - df['Date'].min()).dt.days
+    X = df[['Days']]
+    y = df['Close']
 
-        # Normalize the closing price data
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_data = scaler.fit_transform(df)
+    model = LinearRegression()
+    model.fit(X, y)
 
-        seq_length = 60  # Look-back period (days)
-        X, y = create_sequences(scaled_data, seq_length)
-        X = X.reshape((X.shape[0], X.shape[1], 1))
+    # Evaluate performance (for reference)
+    y_pred = model.predict(X)
+    mse = mean_squared_error(y, y_pred)
+    r2 = r2_score(y, y_pred)
+    return model, mse, r2, df
 
-        # Build the LSTM model architecture
-        model = Sequential()
-        model.add(LSTM(50, return_sequences=True, input_shape=(X.shape[1], 1)))
-        model.add(LSTM(50))
-        model.add(Dense(1))
-        model.compile(optimizer='adam', loss='mean_squared_error')
+def forecast_future_prices(model, last_day, forecast_days):
+    """
+    Given a trained model and the last day as an integer, forecast the next forecast_days.
+    """
+    future_days = np.array([last_day + i for i in range(1, forecast_days+1)]).reshape(-1, 1)
+    future_pred = model.predict(future_days)
+    return future_days, future_pred
 
-        # Check if a pre-trained model exists
-        if os.path.exists(model_filename):
-            st.write("Loading pre-trained model...")
-            model = load_model(model_filename)
-        else:
-            st.write("Training the LSTM model... (this may take a few minutes)")
-            # Train with fewer epochs for faster response; adjust as needed
-            history = model.fit(X, y, epochs=10, batch_size=32, verbose=0)
-            model.save(model_filename)
-            st.write("Training complete and model saved.")
-            # Optionally display training loss
-            loss_fig = go.Figure()
-            loss_fig.add_trace(go.Scatter(
-                x=list(range(len(history.history['loss']))),
-                y=history.history['loss'],
-                mode='lines',
-                name='Training Loss',
-                line=dict(color='blue', width=2)
-            ))
-            loss_fig.update_layout(
-                title="Training Loss Over Epochs",
-                xaxis_title="Epoch",
-                yaxis_title="Loss",
-                template="plotly_white"
-            )
-            st.plotly_chart(loss_fig, use_container_width=True)
+# --- Streamlit App ---
 
-        # Forecast future prices using the trained model
-        last_sequence = scaled_data[-seq_length:]
-        predictions = []
-        current_sequence = last_sequence.copy()
+st.title("Agentic AI Stock Price Predictor")
+st.write("""
+### Predict the next 3 months of closing prices for a stock.
+Enter a stock ticker (e.g., AAPL, MSFT, GOOGL) to see today's price and a 3‑month forecast.
+""")
 
-        for _ in range(forecast_days):
-            pred = model.predict(current_sequence.reshape(1, seq_length, 1))[0, 0]
-            predictions.append(pred)
-            # Append the predicted value and slide the window
-            current_sequence = np.append(current_sequence[1:], [[pred]], axis=0)
+# Sidebar for user inputs
+st.sidebar.header("Settings")
+ticker = st.sidebar.text_input("Stock Ticker", value="AAPL")
 
-        # Convert the predictions back to the original scale
-        predicted_prices = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
-        last_date = df.index[-1]
-        forecast_dates = pd.date_range(last_date + timedelta(days=1), periods=forecast_days)
+# Fetch and display data only if a ticker is provided
+if ticker:
+    st.write(f"Fetching data for **{ticker.upper()}** ...")
+    data = fetch_stock_data(ticker)
+    if data.empty:
+        st.error("No data found. Please check the ticker symbol.")
+    else:
+        data = add_technical_indicators(data)
 
-        # Plot historical and forecasted prices
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['Close'], mode='lines', name='Historical Close Price',
-            line=dict(color='blue', width=2)))
-        fig.add_trace(go.Scatter(
-            x=forecast_dates, y=predicted_prices.flatten(), mode='lines', name='Predicted Price',
-            line=dict(dash='dash', color='red', width=2)))
-        fig.update_layout(
-            title=f"{ticker} Price Forecast",
-            xaxis_title="Date",
-            yaxis_title="Price",
-            template="plotly_white"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        # Display the latest (today's) closing price
+        latest_date = data.index[-1]
+        latest_price = data['Close'].iloc[-1]
+        st.write(f"### Today's closing price ({latest_date.date()}): ${latest_price:.2f}")
 
-        st.markdown(
-            f"""
-            **Explanation:**
-            - The LSTM model is trained on historical closing prices.
-            - It then predicts the next {forecast_days} days of prices based on learned patterns.
-            - The forecast is shown as a red dashed line compared to the historical prices (blue line).
-            """
-        )
+        # Show a brief chart of historical closing prices
+        st.write("#### Historical Closing Prices")
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(data.index, data['Close'], label="Closing Price", color='blue')
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Price (USD)")
+        ax.legend()
+        ax.grid(True)
+        st.pyplot(fig)
+
+        # Get sentiment score from recent news headlines
+        st.write("#### Recent News Sentiment")
+        sentiment = fetch_news_sentiment(ticker)
+        st.write(f"Average sentiment score (−1 very negative, 1 very positive): **{sentiment:.2f}**")
+
+        # --- Forecasting ---
+
+        st.write("#### Forecasting the Next 3 Months")
+
+        # For simplicity, we forecast using a Linear Regression on a time index.
+        # (In future iterations you can integrate technical indicators and sentiment into the model.)
+        model, mse, r2, df_model = train_time_index_model(data)
+        st.write(f"Model Performance on historical data: **MSE = {mse:.2f}**, **R² = {r2:.2f}**")
+
+        # Forecast horizon: approximately 3 months ~ 60 trading days.
+        forecast_days = 60
+        last_day = df_model['Days'].iloc[-1]
+        future_days, future_prices = forecast_future_prices(model, last_day, forecast_days)
+
+        # Create future date range (skipping weekends can be added later; for now, use calendar days)
+        last_date = df_model['Date'].iloc[-1]
+        future_dates = [last_date + datetime.timedelta(days=int(i)) for i in range(1, forecast_days+1)]
+        forecast_df = pd.DataFrame({"Date": future_dates, "Forecast": future_prices})
+
+        # Plot the forecast along with historical data
+        fig2, ax2 = plt.subplots(figsize=(10, 4))
+        ax2.plot(data.index, data['Close'], label="Historical Close", color="blue")
+        ax2.plot(forecast_df["Date"], forecast_df["Forecast"], label="Forecast (Next 3 Months)", color="red", linestyle="--")
+        ax2.set_title(f"{ticker.upper()} Stock Price Forecast")
+        ax2.set_xlabel("Date")
+        ax2.set_ylabel("Price (USD)")
+        ax2.legend()
+        ax2.grid(True)
+        # Improve date formatting on x-axis
+        ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        plt.xticks(rotation=45)
+        st.pyplot(fig2)
+
+        st.write("### Disclaimer")
+        st.write("This prediction is for informational purposes only and should not be considered financial advice.")
